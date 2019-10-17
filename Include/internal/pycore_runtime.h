@@ -179,6 +179,8 @@ typedef struct pyruntimestate {
 
     /* PyInterpreterState.interpreters.main */
     PyInterpreterState _main_interpreter;
+
+    Py_ssize_t ref_total;
 } _PyRuntimeState;
 
 
@@ -192,6 +194,8 @@ PyAPI_FUNC(void) _PyRuntimeState_Fini(_PyRuntimeState *runtime);
 #ifdef HAVE_FORK
 extern PyStatus _PyRuntimeState_ReInitThreads(_PyRuntimeState *runtime);
 #endif
+
+PyAPI_FUNC(Py_ssize_t) _PyRuntimeState_GetRefTotal(_PyRuntimeState *runtime);
 
 /* Initialize _PyRuntimeState.
    Return NULL on success, or return an error message on failure. */

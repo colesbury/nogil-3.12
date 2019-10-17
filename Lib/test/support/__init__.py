@@ -762,7 +762,7 @@ def python_is_optimized():
     return final_opt not in ('', '-O0', '-Og')
 
 
-_header = 'nP'
+_header = 'QQP'  # TODO: using Q instead of two int32_t?
 _align = '0n'
 if hasattr(sys, "getobjects"):
     _header = '2P' + _header

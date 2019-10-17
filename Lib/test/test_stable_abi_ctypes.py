@@ -912,7 +912,6 @@ if feature_macros['PY_HAVE_THREAD_NATIVE_ID']:
 if feature_macros['Py_REF_DEBUG']:
     SYMBOL_NAMES += (
         '_Py_NegativeRefcount',
-        '_Py_RefTotal',
     )
 
 EXPECTED_FEATURE_MACROS = set(['HAVE_FORK',
