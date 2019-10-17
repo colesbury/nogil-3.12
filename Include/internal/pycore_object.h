@@ -21,8 +21,9 @@ extern "C" {
 
 #define _PyObject_IMMORTAL_INIT(type) \
     { \
-        .ob_refcnt = _PyObject_IMMORTAL_REFCNT, \
-        .ob_type = (type), \
+        .ob_tid = (uintptr_t)Py_REF_IMMORTAL, \
+        .ob_ref_local = (uint32_t)Py_REF_IMMORTAL, \
+        .ob_type = type, \
     }
 #define _PyVarObject_IMMORTAL_INIT(type, size) \
     { \
@@ -40,48 +41,39 @@ PyAPI_FUNC(void) _Py_NO_RETURN _Py_FatalRefcountErrorFunc(
 // Increment reference count by n
 static inline void _Py_RefcntAdd(PyObject* op, Py_ssize_t n)
 {
+    uint32_t local = _Py_atomic_load_uint32_relaxed(&op->ob_ref_local);
+    if (_Py_REF_IS_IMMORTAL(local)) {
+        return;
+    }
+
 #ifdef Py_REF_DEBUG
-    _Py_RefTotal += n;
+    _Py_IncRefTotalN(n);
 #endif
-    op->ob_refcnt += n;
+    if (_PY_LIKELY(_Py_ThreadLocal(op))) {
+        local += _Py_STATIC_CAST(uint32_t, (n << _Py_REF_LOCAL_SHIFT));
+        _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, local);
+    }
+    else {
+        _Py_atomic_add_uint32(&op->ob_ref_shared, _Py_STATIC_CAST(uint32_t, n << _Py_REF_SHARED_SHIFT));
+    }
 }
 #define _Py_RefcntAdd(op, n) _Py_RefcntAdd(_PyObject_CAST(op), n)
 
-static inline void
+static _Py_ALWAYS_INLINE void
 _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 {
-    _Py_DECREF_STAT_INC();
-#ifdef Py_REF_DEBUG
-    _Py_RefTotal--;
-#endif
-    if (--op->ob_refcnt != 0) {
-        assert(op->ob_refcnt > 0);
-    }
-    else {
-#ifdef Py_TRACE_REFS
-        _Py_ForgetReference(op);
-#endif
-        destruct(op);
-    }
+    Py_DECREF(op);
 }
 
-static inline void
+static _Py_ALWAYS_INLINE void
 _Py_DECREF_NO_DEALLOC(PyObject *op)
 {
-    _Py_DECREF_STAT_INC();
-#ifdef Py_REF_DEBUG
-    _Py_RefTotal--;
-#endif
-    op->ob_refcnt--;
-#ifdef Py_DEBUG
-    if (op->ob_refcnt <= 0) {
-        _Py_FatalRefcountError("Expected a positive remaining refcount");
-    }
-#endif
+    Py_DECREF(op);
 }
 
 PyAPI_FUNC(int) _PyType_CheckConsistency(PyTypeObject *type);
 PyAPI_FUNC(int) _PyDict_CheckConsistency(PyObject *mp, int check_content);
+PyAPI_FUNC(void) _PyObject_Dealloc(PyObject *self);
 
 /* Update the Python traceback of an object. This function must be called
    when a memory block is reused from a free list.
@@ -206,6 +198,30 @@ static inline void _PyObject_GC_UNTRACK(
 #  define _PyObject_GC_UNTRACK(op) \
         _PyObject_GC_UNTRACK(__FILE__, __LINE__, _PyObject_CAST(op))
 #endif
+
+static _Py_ALWAYS_INLINE int
+_Py_TryIncRefShared_impl(PyObject *op)
+{
+    for (;;) {
+        uint32_t shared = _Py_atomic_load_uint32_relaxed(&op->ob_ref_shared);
+
+        // Check the refcount and merged flag (ignoring queued flag)
+        if ((shared & ~_Py_REF_QUEUED_MASK) == 0) {
+            // Can't incref merged objects with zero refcount
+            return 0;
+        }
+
+        if (_Py_atomic_compare_exchange_uint32(
+                &op->ob_ref_shared,
+                shared,
+                shared + (1 << _Py_REF_SHARED_SHIFT))) {
+#ifdef Py_REF_DEBUG
+            _Py_IncRefTotal();
+#endif
+            return 1;
+        }
+    }
+}
 
 #ifdef Py_REF_DEBUG
 extern void _PyDebug_PrintTotalRefs(void);
