@@ -268,6 +268,8 @@ test_setallocators(PyMemAllocatorDomain domain)
         case PYMEM_DOMAIN_OBJ:
             PyObject_Free(ptr2);
             break;
+        default:
+            break;
     }
 
     CHECK_CTX("free");
@@ -314,6 +316,8 @@ test_setallocators(PyMemAllocatorDomain domain)
             break;
         case PYMEM_DOMAIN_OBJ:
             PyObject_Free(ptr);
+            break;
+        default:
             break;
     }
 
