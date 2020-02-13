@@ -513,6 +513,18 @@ static inline mi_page_t* _mi_segment_page_of(const mi_segment_t* segment, const 
   return mi_slice_to_page(slice);
 }
 
+static inline const mi_slice_t* mi_segment_slices_end(const mi_segment_t* segment) {
+  return &segment->slices[segment->slice_entries];
+}
+
+static inline mi_slice_t* mi_slices_start_iterate(mi_segment_t* segment, const mi_slice_t** end) {
+  mi_slice_t* slice = &segment->slices[0];
+  *end = mi_segment_slices_end(segment);
+  mi_assert_internal(slice->slice_count>0 && slice->xblock_size>0); // segment allocated page
+  slice = slice + slice->slice_count; // skip the first segment allocated page
+  return slice;
+}
+
 // Quick page start for initialized pages
 static inline uint8_t* _mi_page_start(const mi_segment_t* segment, const mi_page_t* page, size_t* page_size) {
   return _mi_segment_page_start(segment, page, page_size);
