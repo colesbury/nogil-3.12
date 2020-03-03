@@ -120,6 +120,7 @@ typedef struct pyruntimestate {
     } xidregistry;
 
     unsigned long main_thread;
+    PyThreadState *main_tstate;
 
     PyWideStringList orig_argv;
 
