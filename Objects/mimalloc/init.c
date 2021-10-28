@@ -32,7 +32,10 @@ const mi_page_t _mi_page_empty = {
   #endif
   MI_ATOMIC_VAR_INIT(0), // xthread_free
   MI_ATOMIC_VAR_INIT(0), // xheap
-  NULL, NULL
+  NULL, NULL,
+  ATOMIC_VAR_INIT(0), // use_qsbr
+  { 0, 0 }, // qsbr_node
+  0         // qsbr_epoch
   #if MI_INTPTR_SIZE==8
   , { 0 }  // padding
   #endif
@@ -180,6 +183,7 @@ static void _mi_thread_init_ex(mi_tld_t* tld, mi_heap_t heaps[])
   tld->segments.stats = &tld->stats;
   tld->segments.os = &tld->os;
   tld->os.stats = &tld->stats;
+  llist_init(&tld->page_list);
 }
 
 static void mi_heap_main_init(void) {
