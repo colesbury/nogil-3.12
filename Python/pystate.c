@@ -12,6 +12,7 @@
 #include "pycore_pylifecycle.h"
 #include "pycore_pymem.h"         // _PyMem_SetDefaultAllocator()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
+#include "pycore_qsbr.h"
 #include "pycore_runtime_init.h"  // _PyRuntimeState_INIT
 #include "pycore_sysmodule.h"
 #include "pycore_refcnt.h"
@@ -257,12 +258,13 @@ _PyThreadState_Attach(PyThreadState *tstate)
             &tstate->status,
             _Py_THREAD_DETACHED,
             _Py_THREAD_ATTACHED)) {
+        // online for QSBR too
+        _Py_qsbr_online(((PyThreadStateImpl *)tstate)->qsbr);
 
         // resume previous critical section
         if (tstate->critical_section != 0) {
             _Py_critical_section_resume(tstate);
         }
-
         return 1;
     }
     return 0;
@@ -271,6 +273,8 @@ _PyThreadState_Attach(PyThreadState *tstate)
 static void
 _PyThreadState_Detach(PyThreadState *tstate)
 {
+    _Py_qsbr_offline(((PyThreadStateImpl *)tstate)->qsbr);
+
     if (tstate->critical_section != 0) {
         _Py_critical_section_end_all(tstate);
     }
@@ -848,7 +852,8 @@ free_threadstate(PyThreadState *tstate)
 static void
 init_threadstate(PyThreadState *tstate,
                  PyInterpreterState *interp, uint64_t id,
-                 PyThreadState *next)
+                 PyThreadState *next,
+                 struct qsbr *empty_qsbr)
 {
     if (tstate->_initialized) {
         Py_FatalError("thread state already initialized");
@@ -873,6 +878,18 @@ init_threadstate(PyThreadState *tstate,
 #ifdef PY_HAVE_THREAD_NATIVE_ID
     tstate->native_thread_id = PyThread_get_thread_native_id();
 #endif
+
+    // First try to recycle an existing qsbr structure
+    PyThreadStateImpl *tstate_impl = (PyThreadStateImpl *)tstate;
+    struct qsbr *recycled = _Py_qsbr_recycle(&_PyRuntime.qsbr_shared, tstate);
+    if (recycled) {
+        tstate_impl->qsbr = recycled;
+    }
+    else {
+        // If no recycled struct, use the newly allocated empty qsbr struct
+        tstate_impl->qsbr = empty_qsbr;
+        _Py_qsbr_register(&_PyRuntime.qsbr_shared, tstate, empty_qsbr);
+    }
 
     tstate->py_recursion_limit = interp->ceval.recursion_limit,
     tstate->py_recursion_remaining = interp->ceval.recursion_limit,
@@ -902,6 +919,12 @@ new_threadstate(PyInterpreterState *interp)
     if (new_tstate == NULL) {
         return NULL;
     }
+    struct qsbr *qsbr = PyMem_RawCalloc(1, sizeof(struct qsbr_pad));
+    if (qsbr == NULL) {
+        PyMem_RawFree(new_tstate);
+        return NULL;
+    }
+
     /* We serialize concurrent creation to protect global state. */
     HEAD_LOCK(runtime);
 
@@ -929,12 +952,16 @@ new_threadstate(PyInterpreterState *interp)
     }
     interp->threads.head = tstate;
 
-    init_threadstate(tstate, interp, id, old_head);
+    init_threadstate(tstate, interp, id, old_head, qsbr);
 
     HEAD_UNLOCK(runtime);
     if (!used_newtstate) {
         // Must be called with lock unlocked to avoid re-entrancy deadlock.
         PyMem_RawFree(new_tstate);
+    }
+    if (qsbr->tstate == NULL) {
+        // If the qsbr structure wasn't used, free it here after the unlock.
+        PyMem_RawFree(qsbr);
     }
     return tstate;
 }
@@ -1172,6 +1199,13 @@ tstate_delete_common(PyThreadState *tstate,
     {
         PyThread_tss_set(&gilstate->autoTSSkey, NULL);
     }
+
+    PyThreadStateImpl *tstate_impl = (PyThreadStateImpl *)tstate;
+    if (is_current) {
+        _Py_qsbr_offline(tstate_impl->qsbr);
+    }
+    _Py_qsbr_unregister(tstate_impl->qsbr);
+    tstate_impl->qsbr = NULL;
 
     _PyRuntimeState *runtime = interp->runtime;
     HEAD_LOCK(runtime);
