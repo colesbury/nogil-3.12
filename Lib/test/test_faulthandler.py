@@ -95,6 +95,8 @@ class FaultHandlerTests(unittest.TestCase):
 
         Raise an error if the output doesn't match the expected format.
         """
+        if sys.flags.nogil:
+            all_threads = False
         if all_threads:
             if know_current_thread:
                 header = 'Current thread 0x[0-9a-f]+'
