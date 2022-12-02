@@ -13,6 +13,7 @@ extern "C" {
 #include "pycore_hamt.h"            // PyHamtNode_Bitmap
 #include "pycore_context.h"         // _PyContextTokenMissing
 #include "pycore_typeobject.h"      // pytype_slotdef
+#include "lock.h"                   // _PyMutex
 
 
 // These would be in pycore_long.h if it weren't for an include cycle.
@@ -36,6 +37,14 @@ struct _Py_cached_objects {
     _PyRuntime.static_objects.NAME
 #define _Py_SINGLETON(NAME) \
     _Py_GLOBAL_OBJECT(singletons.NAME)
+
+
+struct _Py_immortalized_objects {
+    _PyMutex mutex;
+    Py_ssize_t size;
+    Py_ssize_t capacity;
+    PyObject **array;
+};
 
 struct _Py_static_objects {
     struct {
@@ -61,6 +70,8 @@ struct _Py_static_objects {
         PyHamtNode_Bitmap hamt_bitmap_node_empty;
         _PyContextTokenMissing context_token_missing;
     } singletons;
+
+    struct _Py_immortalized_objects immortal;
 };
 
 #define _Py_INTERP_CACHED_OBJECT(interp, NAME) \
