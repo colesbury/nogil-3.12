@@ -54,17 +54,34 @@
 // Define them as macros to make sure that they are always inlined by the
 // preprocessor.
 
-/*
-#undef Py_DECREF
-#define Py_DECREF(arg) \
+#undef _Py_DECREF_SPECIALIZED
+#define _Py_DECREF_SPECIALIZED(arg, dealloc) \
     do { \
         _Py_DECREF_STAT_INC(); \
         PyObject *op = _PyObject_CAST(arg); \
-        if (--op->ob_refcnt == 0) { \
-            destructor dealloc = Py_TYPE(op)->tp_dealloc; \
-            (*dealloc)(op); \
+        if (op->ob_tid == _Py_STATIC_CAST(uintptr_t, Py_REF_IMMORTAL)) { \
+            break; \
+        } \
+        if (_PY_LIKELY(_Py_ThreadIdMatches(op->ob_tid))) { \
+            op->ob_ref_local -= (1 << _Py_REF_LOCAL_SHIFT); \
+            if (op->ob_ref_local == 0) { \
+                if (_PY_LIKELY(op->ob_ref_shared == 0)) { \
+                    op->ob_tid = 0; \
+                    destructor d = (destructor)(dealloc); \
+                    d(op); \
+                } \
+                else { \
+                    _Py_MergeZeroRefcountSlow(op); \
+                } \
+            } \
+        } \
+        else { \
+            _Py_DecRefShared(op); \
         } \
     } while (0)
+
+#undef Py_DECREF
+#define Py_DECREF(arg) _Py_DECREF_SPECIALIZED(arg, Py_TYPE(op)->tp_dealloc)
 
 #undef Py_XDECREF
 #define Py_XDECREF(arg) \
@@ -74,24 +91,11 @@
             Py_DECREF(xop); \
         } \
     } while (0)
-*/
 
 #undef Py_IS_TYPE
 #define Py_IS_TYPE(ob, type) \
     (_PyObject_CAST(ob)->ob_type == (type))
 
-/*
-#undef _Py_DECREF_SPECIALIZED
-#define _Py_DECREF_SPECIALIZED(arg, dealloc) \
-    do { \
-        _Py_DECREF_STAT_INC(); \
-        PyObject *op = _PyObject_CAST(arg); \
-        if (--op->ob_refcnt == 0) { \
-            destructor d = (destructor)(dealloc); \
-            d(op); \
-        } \
-    } while (0)
-*/
 #endif
 
 // GH-89279: Similar to above, force inlining by using a macro.

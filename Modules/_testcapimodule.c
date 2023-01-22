@@ -1647,7 +1647,7 @@ slot_tp_del(PyObject *self)
 
     /* Temporarily resurrect the object. */
     assert(Py_IS_REFERENCED(self) == 0);
-    Py_RESURRECT(self, 1);
+    _Py_RESURRECT(self, 1);
 
     /* Save the current exception, if any. */
     PyErr_Fetch(&error_type, &error_value, &error_traceback);
@@ -1676,8 +1676,7 @@ slot_tp_del(PyObject *self)
      * cause a recursive call.
      */
     assert(Py_REFCNT(self) > 0);
-    self->ob_ref_shared -= (1 << _Py_REF_SHARED_SHIFT);
-    if (Py_REFCNT(self) == 0) {
+    if (_Py_FINISH_RESURRECT(self)) {
         /* this is the normal path out */
         return;
     }
@@ -2345,7 +2344,7 @@ negative_refcount(PyObject *self, PyObject *Py_UNUSED(args))
     }
     assert(Py_REFCNT(obj) == 1);
 
-    pyobject_fake_refcount(obj, 0);
+    Py_SET_REFCNT(obj, 0);
 
     /* Py_DECREF() must call _Py_NegativeRefcount() and abort Python */
     Py_DECREF(obj);
