@@ -205,8 +205,9 @@ _Py_TryIncRefShared_impl(PyObject *op)
     for (;;) {
         uint32_t shared = _Py_atomic_load_uint32_relaxed(&op->ob_ref_shared);
 
-        // Check the refcount and merged flag (ignoring queued flag)
-        if ((shared & ~_Py_REF_QUEUED_MASK) == 0) {
+        // If the shared refcount is zero and the object is either merged
+        // or may not have weak references, then we cannot incref it.
+        if (shared == 0 || shared == _Py_REF_MERGED) {
             // Can't incref merged objects with zero refcount
             return 0;
         }
