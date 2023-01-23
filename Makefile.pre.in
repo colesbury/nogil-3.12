@@ -496,8 +496,8 @@ OBJECT_OBJS=	\
 		Objects/mimalloc/os.o \
 		Objects/mimalloc/page.o \
 		Objects/mimalloc/random.o \
-		Objects/mimalloc/region.o \
 		Objects/mimalloc/segment.o \
+		Objects/mimalloc/segment-cache.o \
 		Objects/mimalloc/stats.o \
 		@PERF_TRAMPOLINE_OBJ@
 
@@ -1457,6 +1457,8 @@ Objects/unicodeobject.o: $(srcdir)/Objects/unicodeobject.c $(UNICODE_DEPS)
 Objects/dictobject.o: $(srcdir)/Objects/stringlib/eq.h
 Objects/setobject.o: $(srcdir)/Objects/stringlib/eq.h
 
+Objects/mimalloc/page.o: $(srcdir)/Objects/mimalloc/page-queue.c
+
 .PHONY: regen-opcode-targets
 regen-opcode-targets:
 	# Regenerate Python/opcode_targets.h from Lib/opcode.py
@@ -1647,6 +1649,7 @@ PYTHON_HEADERS= \
 		$(srcdir)/Include/mimalloc/mimalloc-atomic.h \
 		$(srcdir)/Include/mimalloc/mimalloc.h \
 		$(srcdir)/Include/mimalloc/mimalloc-internal.h \
+		$(srcdir)/Include/mimalloc/mimalloc-track.h \
 		$(srcdir)/Include/mimalloc/mimalloc-types.h \
 		\
 		$(srcdir)/Include/internal/pycore_abstract.h \

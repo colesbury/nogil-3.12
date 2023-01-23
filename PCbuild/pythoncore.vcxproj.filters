@@ -732,6 +732,9 @@
     <ClInclude Include="..\Include\mimalloc\mimalloc-internal.h">
       <Filter>Include\mimalloc</Filter>
     </ClInclude>
+    <ClInclude Include="..\Include\mimalloc\mimalloc-track.h">
+      <Filter>Include\mimalloc</Filter>
+    </ClInclude>
     <ClInclude Include="..\Include\mimalloc\mimalloc-types.h">
       <Filter>Include\mimalloc</Filter>
     </ClInclude>
@@ -1082,10 +1085,10 @@
     <ClCompile Include="..\Objects\mimalloc\random.c">
       <Filter>Objects\mimalloc</Filter>
     </ClCompile>
-    <ClCompile Include="..\Objects\mimalloc\region.c">
+    <ClCompile Include="..\Objects\mimalloc\segment.c">
       <Filter>Objects\mimalloc</Filter>
     </ClCompile>
-    <ClCompile Include="..\Objects\mimalloc\segment.c">
+    <ClCompile Include="..\Objects\mimalloc\segment-cache.c">
       <Filter>Objects\mimalloc</Filter>
     </ClCompile>
     <ClCompile Include="..\Objects\mimalloc\stats.c">

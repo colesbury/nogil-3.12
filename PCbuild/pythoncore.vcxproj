@@ -284,6 +284,7 @@
     <ClInclude Include="..\Include\methodobject.h" />
     <ClInclude Include="..\Include\mimalloc\mimalloc-atomic.h" />
     <ClInclude Include="..\Include\mimalloc\mimalloc-internal.h" />
+    <ClInclude Include="..\Include\mimalloc\mimalloc-track.h" />
     <ClInclude Include="..\Include\mimalloc\mimalloc-types.h" />
     <ClInclude Include="..\Include\mimalloc\mimalloc.h" />
     <ClInclude Include="..\Include\modsupport.h" />
@@ -482,8 +483,8 @@
     <ClCompile Include="..\Objects\mimalloc\os.c" />
     <ClCompile Include="..\Objects\mimalloc\page.c" />
     <ClCompile Include="..\Objects\mimalloc\random.c" />
-    <ClCompile Include="..\Objects\mimalloc\region.c" />
     <ClCompile Include="..\Objects\mimalloc\segment.c" />
+    <ClCompile Include="..\Objects\mimalloc\segment-cache.c" />
     <ClCompile Include="..\Objects\mimalloc\stats.c" />
     <ClCompile Include="..\Objects\moduleobject.c" />
     <ClCompile Include="..\Objects\namespaceobject.c" />

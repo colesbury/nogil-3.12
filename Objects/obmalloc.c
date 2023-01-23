@@ -268,12 +268,14 @@ _PyMem_SetupAllocators(PyMemAllocatorName allocator)
         (void)_PyMem_SetDefaultAllocator(PYMEM_DOMAIN_RAW, NULL);
         (void)_PyMem_SetDefaultAllocator(PYMEM_DOMAIN_MEM, NULL);
         (void)_PyMem_SetDefaultAllocator(PYMEM_DOMAIN_OBJ, NULL);
+        (void)_PyMem_SetDefaultAllocator(PYMEM_DOMAIN_GC, NULL);
         break;
 
     case PYMEM_ALLOCATOR_DEBUG:
         (void)pymem_set_default_allocator(PYMEM_DOMAIN_RAW, 1, NULL);
         (void)pymem_set_default_allocator(PYMEM_DOMAIN_MEM, 1, NULL);
         (void)pymem_set_default_allocator(PYMEM_DOMAIN_OBJ, 1, NULL);
+        (void)pymem_set_default_allocator(PYMEM_DOMAIN_GC, 1, NULL);
         break;
 
 #ifdef WITH_PYMALLOC
