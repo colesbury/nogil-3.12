@@ -42,6 +42,7 @@ class object "PyObject *" "&PyBaseObject_Type"
 #define MCACHE_CACHEABLE_NAME(name)                             \
         PyUnicode_CheckExact(name) &&                           \
         PyUnicode_IS_READY(name) &&                             \
+        PyUnicode_CHECK_INTERNED(name) &&                       \
         (PyUnicode_GET_LENGTH(name) <= MCACHE_MAX_ATTR_SIZE)
 
 #define next_version_tag (_PyRuntime.types.next_version_tag)
@@ -289,48 +290,25 @@ _PyType_GetTextSignatureFromInternalDoc(const char *name, const char *internal_d
 static struct type_cache*
 get_type_cache(void)
 {
-    PyInterpreterState *interp = _PyInterpreterState_GET();
-    return &interp->types.type_cache;
-}
-
-
-static void
-type_cache_clear(struct type_cache *cache, PyObject *value)
-{
-    for (Py_ssize_t i = 0; i < (1 << MCACHE_SIZE_EXP); i++) {
-        struct type_cache_entry *entry = &cache->hashtable[i];
-        entry->version = 0;
-        Py_XSETREF(entry->name, _Py_XNewRef(value));
-        entry->value = NULL;
-    }
+    PyThreadState *tstate = _PyThreadState_GET();
+#ifdef Py_NOGIL
+    return &((PyThreadStateImpl *)tstate)->type_cache;
+#else
+    return &tstate->interp->types.type_cache;
+#endif
 }
 
 
 void
 _PyType_InitCache(PyInterpreterState *interp)
 {
-    struct type_cache *cache = &interp->types.type_cache;
-    for (Py_ssize_t i = 0; i < (1 << MCACHE_SIZE_EXP); i++) {
-        struct type_cache_entry *entry = &cache->hashtable[i];
-        assert(entry->name == NULL);
-
-        entry->version = 0;
-        // Set to None so _PyType_Lookup() can use Py_SETREF(),
-        // rather than using slower Py_XSETREF().
-        entry->name = Py_None;
-        entry->value = NULL;
-    }
 }
 
 
 static unsigned int
-_PyType_ClearCache(PyInterpreterState *interp)
+_PyType_ClearCache(PyThreadStateImpl *tstate)
 {
-    struct type_cache *cache = &interp->types.type_cache;
-    // Set to None, rather than NULL, so _PyType_Lookup() can
-    // use Py_SETREF() rather than using slower Py_XSETREF().
-    type_cache_clear(cache, Py_None);
-
+    memset(&tstate->type_cache, 0, sizeof(tstate->type_cache));
     return next_version_tag - 1;
 }
 
@@ -338,17 +316,16 @@ _PyType_ClearCache(PyInterpreterState *interp)
 unsigned int
 PyType_ClearCache(void)
 {
-    PyInterpreterState *interp = _PyInterpreterState_GET();
-    return _PyType_ClearCache(interp);
+    // TODO: clear all threads type caches or merge type caches
+    PyThreadState *tstate = _PyThreadState_GET();
+    return _PyType_ClearCache((PyThreadStateImpl *)tstate);
 }
 
 
 void
 _PyTypes_Fini(PyInterpreterState *interp)
 {
-    struct type_cache *cache = &interp->types.type_cache;
-    type_cache_clear(cache, NULL);
-
+    _PyType_ClearCache(&interp->_initial_thread);
     assert(interp->types.num_builtins_initialized == 0);
     // All the static builtin types should have been finalized already.
     for (size_t i = 0; i < _Py_MAX_STATIC_BUILTIN_TYPES; i++) {
@@ -436,8 +413,8 @@ PyType_Unwatch(int watcher_id, PyObject* obj)
     return 0;
 }
 
-void
-PyType_Modified(PyTypeObject *type)
+static void
+_PyType_ModifiedEx(PyTypeObject *type)
 {
     /* Invalidate any cached data for the specified type and all
        subclasses.  This function is called after the base
@@ -469,7 +446,7 @@ PyType_Modified(PyTypeObject *type)
             if (subclass == NULL) {
                 continue;
             }
-            PyType_Modified(subclass);
+            _PyType_ModifiedEx(subclass);
             Py_DECREF(subclass);
         }
     }
@@ -494,6 +471,14 @@ PyType_Modified(PyTypeObject *type)
 
     type->tp_flags &= ~Py_TPFLAGS_VALID_VERSION_TAG;
     type->tp_version_tag = 0; /* 0 is not a valid version tag */
+}
+
+void
+PyType_Modified(PyTypeObject *type)
+{
+    _PyMutex_lock(&_PyRuntime.mutex);
+    _PyType_ModifiedEx(type);
+    _PyMutex_unlock(&_PyRuntime.mutex);
 }
 
 static void
@@ -564,11 +549,12 @@ assign_version_tag(PyTypeObject *type)
         return 0;
     }
 
+    uint32_t version_tag = _Py_atomic_add_uint32(&next_version_tag, 1);
     if (next_version_tag == 0) {
         /* We have run out of version numbers */
         return 0;
     }
-    type->tp_version_tag = next_version_tag++;
+    type->tp_version_tag = (unsigned int)version_tag;
     assert (type->tp_version_tag != 0);
 
     PyObject *bases = type->tp_bases;
@@ -4198,9 +4184,10 @@ _PyType_Lookup(PyTypeObject *type, PyObject *name)
         entry->version = type->tp_version_tag;
         entry->value = res;  /* borrowed */
         assert(_PyASCIIObject_CAST(name)->hash != -1);
-        OBJECT_STAT_INC_COND(type_cache_collisions, entry->name != Py_None && entry->name != name);
+        OBJECT_STAT_INC_COND(type_cache_collisions, entry->name != NULL && entry->name != name);
         assert(_PyType_HasFeature(type, Py_TPFLAGS_VALID_VERSION_TAG));
-        Py_SETREF(entry->name, Py_NewRef(name));
+        assert(_PyObject_IS_IMMORTAL(name));
+        entry->name = name;
     }
     return res;
 }
@@ -4374,7 +4361,9 @@ type_setattro(PyTypeObject *type, PyObject *name, PyObject *value)
         PyType_Modified(type);
 
         if (is_dunder_name(name)) {
+            _PyMutex_lock(&_PyRuntime.mutex);
             res = update_slot(type, name);
+            _PyMutex_unlock(&_PyRuntime.mutex);
         }
         assert(_PyType_CheckConsistency(type));
     }
@@ -6992,6 +6981,15 @@ _PyStaticType_InitBuiltin(PyTypeObject *self)
     return res;
 }
 
+static PyObject *
+init_once(void *dst, PyObject *obj)
+{
+    if (!_Py_atomic_compare_exchange_ptr(dst, NULL, obj)) {
+        Py_DECREF(obj);
+        obj = _Py_atomic_load_ptr(dst);
+    }
+    return obj;
+}
 
 static PyObject *
 init_subclasses(PyTypeObject *self)
@@ -7002,11 +7000,9 @@ init_subclasses(PyTypeObject *self)
     }
     if (self->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
         static_builtin_state *state = _PyStaticType_GetState(self);
-        state->tp_subclasses = subclasses;
-        return subclasses;
+        return init_once(&state->tp_subclasses, subclasses);
     }
-    self->tp_subclasses = (void *)subclasses;
-    return subclasses;
+    return init_once(&self->tp_subclasses, subclasses);
 }
 
 static void
@@ -9074,13 +9070,16 @@ update_all_slots(PyTypeObject* type)
 {
     pytype_slotdef *p;
 
+    _PyMutex_lock(&_PyRuntime.mutex);
+
     /* Clear the VALID_VERSION flag of 'type' and all its subclasses. */
-    PyType_Modified(type);
+    _PyType_ModifiedEx(type);
 
     for (p = slotdefs; p->name; p++) {
         /* update_slot returns int but can't actually fail */
         update_slot(type, p->name_strobj);
     }
+    _PyMutex_unlock(&_PyRuntime.mutex);
 }
 
 

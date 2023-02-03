@@ -165,11 +165,12 @@ typedef struct pyruntimestate {
     struct _Py_dict_runtime_state dict_state;
     struct _py_func_runtime_state func_state;
 
+    _PyMutex mutex;
     struct {
         /* Used to set PyTypeObject.tp_version_tag */
         // bpo-42745: next_version_tag remains shared by all interpreters
         // because of static types.
-        unsigned int next_version_tag;
+        uint32_t next_version_tag;
     } types;
 
     /* All the objects that are shared by the runtime's interpreters. */
