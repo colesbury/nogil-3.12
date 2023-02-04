@@ -192,6 +192,11 @@ struct _gc_runtime_state {
        A value of 100 means to collect every time the number of live
        objects doubles. */
     int gc_scale;
+    /* Number of threads that must park themselves to stop-the-world.
+       Protected by HEAD_LOCK(runtime). */
+    Py_ssize_t gc_thread_countdown;
+    /* Signalled when all threads stops thesmelves for GC */
+    _PyRawEvent gc_stop_event;
     /* This is the number of objects that survived the last full
        collection. It approximates the number of long lived objects
        tracked by the GC.
@@ -215,10 +220,10 @@ static inline int
 _PyGC_ShouldCollect(struct _gc_runtime_state *gcstate)
 {
     Py_ssize_t live = _Py_atomic_load_ssize_relaxed(&gcstate->gc_live);
-    return (live >= gcstate->gc_threshold &&
+    Py_ssize_t threshold = _Py_atomic_load_ssize_relaxed(&gcstate->gc_threshold);
+    return (live >= threshold &&
             gcstate->enabled &&
-            gcstate->gc_threshold &&
-            !gcstate->collecting);
+            threshold);
 }
 
 // Functions to clear types free lists
@@ -228,7 +233,6 @@ extern void _PyList_ClearFreeList(PyInterpreterState *interp);
 extern void _PyDict_ClearFreeList(PyInterpreterState *interp);
 extern void _PyAsyncGen_ClearFreeLists(PyInterpreterState *interp);
 extern void _PyContext_ClearFreeList(PyInterpreterState *interp);
-extern void _Py_ScheduleGC(PyInterpreterState *interp);
 extern void _Py_RunGC(PyThreadState *tstate);
 
 #ifdef __cplusplus
