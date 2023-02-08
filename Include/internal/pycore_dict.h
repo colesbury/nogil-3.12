@@ -184,7 +184,7 @@ _PyDictValues_AddToInsertionOrder(PyDictValues *values, Py_ssize_t ix)
     assert(ix < SHARED_KEYS_MAX_SIZE);
     uint8_t *size_ptr = ((uint8_t *)values)-2;
     int size = *size_ptr;
-    assert(size+2 < ((uint8_t *)values)[-1]);
+    assert(size < ((uint8_t *)values)[-1]);
     size++;
     size_ptr[-size] = (uint8_t)ix;
     *size_ptr = size;
