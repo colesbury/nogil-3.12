@@ -161,6 +161,7 @@ void       _mi_heap_set_default_direct(mi_heap_t* heap);
 bool       _mi_heap_memid_is_suitable(mi_heap_t* heap, size_t memid);
 void       _mi_heap_destroy_all(void);
 void       _mi_heap_absorb(mi_heap_t* heap, mi_heap_t* from);
+bool       _mi_abandoned_visit_blocks(int page_tag, bool visit_blocks, mi_block_visit_fun* visitor, void* arg);
 
 // "stats.c"
 void       _mi_stats_done(mi_stats_t* stats);
