@@ -37,8 +37,13 @@ class object "PyObject *" "&PyBaseObject_Type"
         (((unsigned int)(version) ^ (unsigned int)(name_hash))          \
          & ((1 << MCACHE_SIZE_EXP) - 1))
 
-#define MCACHE_HASH_METHOD(type, name)                                  \
-    MCACHE_HASH((type)->tp_version_tag, ((Py_ssize_t)(name)) >> 3)
+static inline unsigned int
+MCACHE_HASH_METHOD(PyTypeObject *type, PyObject *name)
+{
+    unsigned int version = _Py_atomic_load_uint32_relaxed(&type->tp_version_tag);
+    return MCACHE_HASH(version, ((Py_ssize_t)(name)) >> 3);
+}
+
 #define MCACHE_CACHEABLE_NAME(name)                             \
         PyUnicode_CheckExact(name) &&                           \
         PyUnicode_IS_READY(name) &&                             \
@@ -534,6 +539,23 @@ type_mro_modified(PyTypeObject *type, PyObject *bases) {
     type->tp_version_tag = 0; /* 0 is not a valid version tag */
 }
 
+static unsigned int
+advance_version_tag(void)
+{
+retry: ;
+    unsigned int version_tag = _Py_atomic_load_uint_relaxed(&next_version_tag);
+    if (version_tag == 0) {
+        /* We have run out of version numbers */
+        return 0;
+    }
+    if (!_Py_atomic_compare_exchange_uint(&next_version_tag,
+                                          version_tag,
+                                          version_tag + 1)) {
+        goto retry;
+    }
+    return version_tag;
+}
+
 static int
 assign_version_tag(PyTypeObject *type)
 {
@@ -549,12 +571,13 @@ assign_version_tag(PyTypeObject *type)
         return 0;
     }
 
-    uint32_t version_tag = _Py_atomic_add_uint32(&next_version_tag, 1);
-    if (next_version_tag == 0) {
+    unsigned int version_tag = advance_version_tag();
+    if (version_tag == 0) {
         /* We have run out of version numbers */
         return 0;
     }
-    type->tp_version_tag = (unsigned int)version_tag;
+
+    _Py_atomic_store_uint32_relaxed(&type->tp_version_tag, version_tag);
     assert (type->tp_version_tag != 0);
 
     PyObject *bases = type->tp_bases;
@@ -564,7 +587,8 @@ assign_version_tag(PyTypeObject *type)
         if (!assign_version_tag(_PyType_CAST(b)))
             return 0;
     }
-    type->tp_flags |= Py_TPFLAGS_VALID_VERSION_TAG;
+    _Py_atomic_store_ulong_relaxed(
+        &type->tp_flags, type->tp_flags | Py_TPFLAGS_VALID_VERSION_TAG);
     return 1;
 }
 

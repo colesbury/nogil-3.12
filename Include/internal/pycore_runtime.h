@@ -176,7 +176,7 @@ typedef struct pyruntimestate {
         /* Used to set PyTypeObject.tp_version_tag */
         // bpo-42745: next_version_tag remains shared by all interpreters
         // because of static types.
-        uint32_t next_version_tag;
+        unsigned int next_version_tag;
     } types;
 
     /* All the objects that are shared by the runtime's interpreters. */
