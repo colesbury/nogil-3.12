@@ -55,6 +55,7 @@
 // Define them as macros to make sure that they are always inlined by the
 // preprocessor.
 
+#ifndef _Py_THREAD_SANITIZER
 #undef _Py_DECREF_SPECIALIZED
 #define _Py_DECREF_SPECIALIZED(arg, dealloc) \
     do { \
@@ -92,6 +93,7 @@
             Py_DECREF(xop); \
         } \
     } while (0)
+#endif
 
 #undef Py_IS_TYPE
 #define Py_IS_TYPE(ob, type) \
@@ -944,6 +946,13 @@ GETITEM(PyObject *v, Py_ssize_t i) {
 #define ADAPTIVE_COUNTER_IS_MAX(COUNTER) \
     (((COUNTER) >> ADAPTIVE_BACKOFF_BITS) == ((1 << MAX_BACKOFF_VALUE) - 1))
 
+#if _Py_NO_SPECIALIZATIONS
+
+#define DECREMENT_ADAPTIVE_COUNTER(COUNTER)
+#define INCREMENT_ADAPTIVE_COUNTER(COUNTER)
+
+#else
+
 #define DECREMENT_ADAPTIVE_COUNTER(COUNTER)           \
     do {                                              \
         assert(!ADAPTIVE_COUNTER_IS_ZERO((COUNTER))); \
@@ -955,6 +964,8 @@ GETITEM(PyObject *v, Py_ssize_t i) {
         assert(!ADAPTIVE_COUNTER_IS_MAX((COUNTER))); \
         (COUNTER) += (1 << ADAPTIVE_BACKOFF_BITS);   \
     } while (0);
+
+#endif
 
 static int
 trace_function_entry(PyThreadState *tstate, _PyInterpreterFrame *frame)
