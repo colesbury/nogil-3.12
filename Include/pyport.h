@@ -790,5 +790,8 @@ extern char * _getpty(int *, int, mode_t, int);
 #  define _Py_NO_SANITIZE_THREAD
 #endif
 
+#if defined(_Py_THREAD_SANITIZER)
+#define _Py_NO_SPECIALIZATIONS 1
+#endif
 
 #endif /* Py_PYPORT_H */
