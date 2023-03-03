@@ -263,6 +263,7 @@ take_gil(PyThreadState *tstate)
            This code path can be reached by a daemon thread after Py_Finalize()
            completes. In this case, tstate is a dangling pointer: points to
            PyThreadState freed memory. */
+        _PyThreadState_DecRef(tstate);
         PyThread_exit_thread();
     }
 
@@ -310,6 +311,7 @@ take_gil(PyThreadState *tstate)
                     _PyThreadState_Unsignal(gil->holder, EVAL_DROP_GIL);
                 }
                 MUTEX_UNLOCK(gil->mutex);
+                _PyThreadState_DecRef(tstate);
                 PyThread_exit_thread();
             }
             assert(is_tstate_valid(tstate));
@@ -350,6 +352,7 @@ _ready:
            wait_for_thread_shutdown() from Py_Finalize(). */
         MUTEX_UNLOCK(gil->mutex);
         drop_gil(ceval, ceval2, tstate);
+        _PyThreadState_DecRef(tstate);
         PyThread_exit_thread();
     }
     assert(is_tstate_valid(tstate));
