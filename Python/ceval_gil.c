@@ -477,6 +477,9 @@ PyEval_ReleaseLock(void)
 void
 _PyEval_ReleaseLock(PyThreadState *tstate)
 {
+    if (!_PyRuntime.ceval.gil.enabled) {
+        return;
+    }
     struct _ceval_runtime_state *ceval = &tstate->interp->runtime->ceval;
     struct _ceval_state *ceval2 = &tstate->interp->ceval;
     drop_gil(ceval, ceval2, tstate);
