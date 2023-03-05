@@ -21,6 +21,8 @@ typedef struct {
     Py_ssize_t allocated;
 
     _PyMutex mutex;
+
+    uint8_t maybe_shared;
 } PyListObject;
 
 typedef struct {

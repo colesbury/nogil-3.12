@@ -63,8 +63,7 @@ list_allocate_array(size_t capacity)
     if (capacity > PY_SSIZE_T_MAX/sizeof(PyObject*) - 1) {
         return NULL;
     }
-    mi_heap_t *heap = _PyThreadState_GET()->heaps[mi_heap_tag_list_array];
-    _PyListArray *arr = mi_heap_malloc(heap, sizeof(_PyListArray) + (capacity - 1) * sizeof(PyObject *));
+    _PyListArray *arr = PyMem_Malloc(sizeof(_PyListArray) + (capacity - 1) * sizeof(PyObject *));
     if (arr == NULL) {
         return NULL;
     }
@@ -78,6 +77,18 @@ list_array(PyObject **items)
     char *mem = (char *)items;
     mem -= offsetof(_PyListArray, ob_item);
     return (_PyListArray *)mem;
+}
+
+static void
+free_list_array(PyObject **items, bool use_qsbr)
+{
+    _PyListArray *arr = list_array(items);
+    if (use_qsbr) {
+        _PyMem_FreeQsbr(arr);
+    }
+    else {
+        PyMem_Free(arr);
+    }
 }
 
 /* Ensure ob_item has room for at least newsize elements, and set
@@ -103,20 +114,25 @@ list_ensure_capacity_slow(PyListObject *self, Py_ssize_t base, Py_ssize_t extra)
         return 0;
     }
 
+    if (!_Py_ThreadLocal((PyObject *)self)) {
+        _Py_atomic_store_uint8_relaxed(&self->maybe_shared, 1);
+    }
+
     size_t capacity = list_good_size(reqsize);
     _PyListArray *arr = list_allocate_array(capacity);
     if (arr == NULL) {
         PyErr_NoMemory();
         return -1;
     }
+    PyObject **old = self->ob_item;
     if (self->ob_item) {
         memcpy(&arr->ob_item, self->ob_item, allocated * sizeof(PyObject*));
-        _PyListArray *old = list_array(self->ob_item);
-        mi_free_qsbr(old);
     }
-
     _Py_atomic_store_ptr_release(&self->ob_item, &arr->ob_item);
     self->allocated = capacity;
+    if (old) {
+        free_list_array(old, self->maybe_shared);
+    }
     return 0;
 }
 
@@ -239,6 +255,7 @@ list_new(Py_ssize_t size)
     }
     Py_SET_SIZE(op, size);
     memset(&op->mutex, 0, sizeof(op->mutex));
+    op->maybe_shared = 0;
     _PyObject_GC_TRACK(op);
     return op;
 }
@@ -298,6 +315,9 @@ list_item_locked(PyListObject *self, Py_ssize_t idx, PyObject *dead)
 
     PyObject *item = NULL;
     Py_BEGIN_CRITICAL_SECTION(&self->mutex);
+    if (!self->maybe_shared) {
+        _Py_atomic_store_uint8_relaxed(&self->maybe_shared, 1);
+    }
     Py_ssize_t size = Py_SIZE(self);
     if (!valid_index(idx, size)) {
         goto exit;
@@ -308,9 +328,19 @@ exit:
     return item;
 }
 
+static int
+list_needs_read_lock(PyListObject *self)
+{
+    return (!_Py_ThreadLocal((PyObject *)self) &&
+            !_Py_atomic_load_uint8_relaxed(&self->maybe_shared));
+}
+
 static inline PyObject *
 list_fetch_item(PyListObject *self, Py_ssize_t idx)
 {
+    if (list_needs_read_lock(self)) {
+        return list_item_locked(self, idx, NULL);
+    }
     Py_ssize_t size = _Py_atomic_load_ssize_relaxed(&((PyVarObject *)self)->ob_size);
     if (!valid_index(idx, size)) {
         return NULL;
@@ -524,7 +554,7 @@ list_dealloc(PyListObject *op)
         while (--i >= 0) {
             Py_XDECREF(op->ob_item[i]);
         }
-        mi_free(list_array(op->ob_item));
+        free_list_array(op->ob_item, false);
     }
 #if PyList_MAXFREELIST > 0
     struct _Py_list_state *state = get_list_state();
@@ -808,8 +838,8 @@ list_repeat(PyListObject *a, Py_ssize_t n)
     return ret;
 }
 
-static int
-_list_clear(PyListObject *a)
+static void
+_list_clear_impl(PyListObject *a, bool is_resize)
 {
     Py_ssize_t i;
     PyObject **item = a->ob_item;
@@ -823,11 +853,22 @@ _list_clear(PyListObject *a)
         while (--i >= 0) {
             Py_XDECREF(item[i]);
         }
-        mi_free(list_array(item));
+        free_list_array(item, is_resize && a->maybe_shared);
     }
-    /* Never fails; the return value can be ignored.
-       Note that there is no guarantee that the list is actually empty
+    /* Note that there is no guarantee that the list is actually empty
        at this point, because XDECREF may have populated it again! */
+}
+
+static void
+_list_clear(PyListObject *a)
+{
+    _list_clear_impl(a, true);
+}
+
+static int
+list_tp_clear(PyListObject *a)
+{
+    _list_clear_impl(a, false);
     return 0;
 }
 
@@ -1031,7 +1072,7 @@ list_inplace_repeat_locked(PyListObject *self, Py_ssize_t n)
     }
 
     if (n < 1) {
-        (void)_list_clear(self);
+        _list_clear(self);
         return Py_NewRef(self);
     }
 
@@ -2910,7 +2951,7 @@ keyfunc_fail:
         while (--i >= 0) {
             Py_XDECREF(final_ob_item[i]);
         }
-        mi_free(list_array(final_ob_item));
+        free_list_array(final_ob_item, self->maybe_shared);
     }
     return Py_XNewRef(result);
 }
@@ -3240,7 +3281,7 @@ list___init___impl(PyListObject *self, PyObject *iterable)
 
     /* Empty previous contents */
     if (self->ob_item != NULL) {
-        (void)_list_clear(self);
+        _list_clear(self);
     }
     if (iterable != NULL) {
         PyObject *rv = list_extend(self, iterable);
@@ -3413,7 +3454,7 @@ PyTypeObject PyList_Type = {
         _Py_TPFLAGS_MATCH_SELF | Py_TPFLAGS_SEQUENCE,  /* tp_flags */
     list___init____doc__,                       /* tp_doc */
     (traverseproc)list_traverse,                /* tp_traverse */
-    (inquiry)_list_clear,                       /* tp_clear */
+    (inquiry)list_tp_clear,                    /* tp_clear */
     list_richcompare,                           /* tp_richcompare */
     0,                                          /* tp_weaklistoffset */
     list_iter,                                  /* tp_iter */
