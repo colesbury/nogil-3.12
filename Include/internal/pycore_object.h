@@ -243,6 +243,55 @@ _Py_TryIncRefShared_impl(PyObject *op)
 }
 
 static inline void
+_Py_INCREF_WITH_LOCK(PyObject *op)
+{
+    _Py_INCREF_STAT_INC();
+    uint32_t local = _Py_atomic_load_uint32_relaxed(&op->ob_ref_local);
+    local += (1 << _Py_REF_LOCAL_SHIFT);
+    if (local == 0) {
+        return;
+    }
+
+#ifdef Py_REF_DEBUG
+    _Py_IncRefTotal();
+#endif
+    if (_PY_LIKELY(_Py_ThreadLocal(op))) {
+        _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, local);
+    }
+    else {
+        for (;;) {
+            uint32_t shared = _Py_atomic_load_uint32_relaxed(&op->ob_ref_shared);
+            uint32_t new_shared = shared + (1 << _Py_REF_SHARED_SHIFT);
+            if ((shared & _Py_REF_SHARED_FLAG_MASK) == 0) {
+                new_shared |= _Py_REF_MAYBE_WEAKREF;
+            }
+            if (_Py_atomic_compare_exchange_uint32(
+                    &op->ob_ref_shared,
+                    shared,
+                    new_shared)) {
+                return;
+            }
+        }
+    }
+}
+
+static inline PyObject *
+_Py_NewRefWithLock(PyObject *obj)
+{
+    _Py_INCREF_WITH_LOCK(obj);
+    return obj;
+}
+
+static inline PyObject *
+_Py_XNewRefWithLock(PyObject *obj)
+{
+    if (obj != NULL) {
+        _Py_INCREF_WITH_LOCK(obj);
+    }
+    return obj;
+}
+
+static inline void
 _PyObject_SetMaybeWeakref(PyObject *op)
 {
     if (_PyObject_IS_IMMORTAL(op)) {
