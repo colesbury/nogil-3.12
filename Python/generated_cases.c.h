@@ -529,7 +529,7 @@
             assert(cframe.use_tracing == 0);
             DEOPT_IF(!PyDict_CheckExact(dict), BINARY_SUBSCR);
             STAT_INC(BINARY_SUBSCR, hit);
-            res = PyDict_GetItemWithError(dict, sub);
+            res = PyDict_FetchItemWithError(dict, sub);
             if (res == NULL) {
                 if (!_PyErr_Occurred(tstate)) {
                     _PyErr_SetKeyError(sub);
@@ -538,7 +538,6 @@
                 Py_DECREF(sub);
                 if (true) goto pop_2_error;
             }
-            Py_INCREF(res);  // Do this before DECREF'ing dict, sub
             Py_DECREF(dict);
             Py_DECREF(sub);
             STACK_SHRINK(1);
@@ -1420,15 +1419,14 @@
         }
 
         TARGET(DELETE_DEREF) {
-            PyObject *cell = GETLOCAL(oparg);
-            PyObject *oldobj = PyCell_GET(cell);
+            PyCellObject *cell = (PyCellObject *)GETLOCAL(oparg);
+            PyObject *oldobj = _Py_atomic_exchange_ptr(&cell->ob_ref, NULL);
             // Can't use ERROR_IF here.
             // Fortunately we don't need its superpower.
             if (oldobj == NULL) {
                 format_exc_unbound(tstate, frame->f_code, oparg);
                 goto error;
             }
-            PyCell_SET(cell, NULL);
             Py_DECREF(oldobj);
             DISPATCH();
         }
@@ -1473,13 +1471,12 @@
 
         TARGET(LOAD_DEREF) {
             PyObject *value;
-            PyObject *cell = GETLOCAL(oparg);
-            value = PyCell_GET(cell);
+            PyCellObject *cell = (PyCellObject *)GETLOCAL(oparg);
+            value = _Py_XFetchRef(&cell->ob_ref);
             if (value == NULL) {
                 format_exc_unbound(tstate, frame->f_code, oparg);
                 if (true) goto error;
             }
-            Py_INCREF(value);
             STACK_GROW(1);
             POKE(1, value);
             DISPATCH();
@@ -1487,9 +1484,9 @@
 
         TARGET(STORE_DEREF) {
             PyObject *v = PEEK(1);
-            PyObject *cell = GETLOCAL(oparg);
-            PyObject *oldobj = PyCell_GET(cell);
-            PyCell_SET(cell, v);
+            PyCellObject *cell = (PyCellObject *)GETLOCAL(oparg);
+            _PyObject_SetMaybeWeakref(v);
+            PyObject *oldobj = _Py_atomic_exchange_ptr(&cell->ob_ref, v);
             Py_XDECREF(oldobj);
             STACK_SHRINK(1);
             DISPATCH();
