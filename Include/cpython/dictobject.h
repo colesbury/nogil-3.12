@@ -28,6 +28,8 @@ typedef struct {
     PyDictValues *ma_values;
 
     PyMutex ma_mutex;
+
+    uint8_t ma_maybe_shared;
 } PyDictObject;
 
 PyAPI_FUNC(PyObject *) _PyDict_GetItem_KnownHash(PyObject *mp, PyObject *key,

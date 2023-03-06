@@ -12,6 +12,7 @@
 #include "pycore_pyerrors.h"
 #include "pycore_pylifecycle.h"
 #include "pycore_pymem.h"         // _PyMem_DefaultRawFree()
+#include "pycore_pyqueue.h"       // _Py_queue_init
 #include "pycore_pystate.h"       // _PyThreadState_GET()
 #include "pycore_qsbr.h"
 #include "pycore_runtime_init.h"  // _PyRuntimeState_INIT
@@ -1066,6 +1067,7 @@ init_threadstate(PyThreadState *tstate,
     tstate->daemon = (id > 1);
     tstate->done_event = done_event;
     _PyEventRc_Incref(done_event);
+    _Py_queue_init(&tstate->mem_work);
 
     if (_PyRuntime.stop_the_world_requested) {
         tstate->status = _Py_THREAD_GC;
