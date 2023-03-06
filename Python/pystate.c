@@ -465,6 +465,7 @@ init_interpreter(PyInterpreterState *interp,
     _PyGC_InitState(&interp->gc);
     PyConfig_InitPythonConfig(&interp->config);
     _PyType_InitCache(interp);
+    _Py_queue_init(&interp->mem.work);
 
     interp->_initialized = 1;
 }
@@ -598,6 +599,9 @@ interpreter_clear(PyInterpreterState *interp, PyThreadState *tstate)
     /* Last garbage collection on this interpreter */
     _PyGC_CollectNoFail(tstate);
     _PyGC_Fini(interp);
+
+    /* Perform any delayed PyMem_Free calls */
+    _PyMem_QsbrFini(interp);
 
     /* We don't clear sysdict and builtins until the end of this function.
        Because clearing other attributes can execute arbitrary Python code
@@ -1321,6 +1325,7 @@ PyThreadState_Clear(PyThreadState *tstate)
     }
 
     _Py_queue_destroy(tstate);
+    _PyMem_AbandonQsbr(tstate);
 
     /* Don't clear tstate->pyframe: it is a borrowed reference */
 
