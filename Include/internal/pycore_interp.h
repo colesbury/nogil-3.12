@@ -27,6 +27,7 @@ extern "C" {
 #include "pycore_pymem.h"         // struct _mem_work
 #include "pycore_tuple.h"         // struct _Py_tuple_state
 #include "pycore_typeobject.h"    // struct type_cache
+#include "pycore_typecache.h"     // struct _mro_cache_state
 #include "pycore_unicodeobject.h" // struct _Py_unicode_state
 #include "pycore_warnings.h"      // struct _warnings_runtime_state
 
@@ -120,6 +121,7 @@ struct _is {
     struct _ceval_state ceval;
     struct _gc_runtime_state gc;
     struct _mem_state mem;
+    struct _mro_cache_state mro_cache;
 
     // sys.modules dictionary
     PyObject *modules;

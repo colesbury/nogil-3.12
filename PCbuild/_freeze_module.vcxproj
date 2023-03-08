@@ -254,6 +254,7 @@
     </ClCompile>
     <ClCompile Include="..\Python\thread.c" />
     <ClCompile Include="..\Python\traceback.c" />
+    <ClCompile Include="..\Python\typecache.c" />
   </ItemGroup>
   <ItemGroup>
     <!-- BEGIN frozen modules -->

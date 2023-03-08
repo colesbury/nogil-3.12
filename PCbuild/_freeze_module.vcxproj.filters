@@ -433,6 +433,9 @@
     <ClCompile Include="..\Python\traceback.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\Python\typecache.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\Objects\tupleobject.c">
       <Filter>Source Files</Filter>
     </ClCompile>

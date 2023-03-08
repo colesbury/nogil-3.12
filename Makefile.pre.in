@@ -423,6 +423,7 @@ PYTHON_OBJS=	\
 		Python/sysmodule.o \
 		Python/thread.o \
 		Python/traceback.o \
+		Python/typecache.o \
 		Python/getopt.o \
 		Python/pystrcmp.o \
 		Python/pystrtod.o \
@@ -1722,6 +1723,7 @@ PYTHON_HEADERS= \
 		$(srcdir)/Include/internal/pycore_traceback.h \
 		$(srcdir)/Include/internal/pycore_tracemalloc.h \
 		$(srcdir)/Include/internal/pycore_tuple.h \
+		$(srcdir)/Include/internal/pycore_typecache.h \
 		$(srcdir)/Include/internal/pycore_typeobject.h \
 		$(srcdir)/Include/internal/pycore_ucnhash.h \
 		$(srcdir)/Include/internal/pycore_unionobject.h \

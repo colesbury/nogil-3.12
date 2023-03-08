@@ -29,6 +29,7 @@
 #include "pycore_traceback.h"     // _Py_DumpTracebackThreads()
 #include "pycore_tuple.h"         // _PyTuple_InitTypes()
 #include "pycore_typeobject.h"    // _PyTypes_InitTypes()
+#include "pycore_typecache.h"     // _Py_mro_cache_init()
 #include "pycore_unicodeobject.h" // _PyUnicode_InitTypes()
 #include "opcode.h"
 
@@ -900,6 +901,11 @@ pycore_interp_init(PyThreadState *tstate)
     // can use it instead of creating a heap allocated string.
     if (_Py_Deepfreeze_Init() < 0) {
         return _PyStatus_ERR("failed to initialize deep-frozen modules");
+    }
+
+    status = _Py_mro_cache_init(interp);
+    if (_PyStatus_EXCEPTION(status)) {
+        goto done;
     }
 
     status = pycore_init_types(interp);
@@ -1796,6 +1802,7 @@ finalize_interp_clear(PyThreadState *tstate)
     }
 
     finalize_interp_types(tstate->interp);
+    _Py_mro_cache_fini(tstate->interp);
 }
 
 
