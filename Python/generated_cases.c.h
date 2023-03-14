@@ -2616,15 +2616,19 @@
             DEOPT_IF(Py_TYPE(it) != &PyListIter_Type, FOR_ITER);
             STAT_INC(FOR_ITER, hit);
             PyListObject *seq = it->it_seq;
-            if (it->it_index >= 0) {
-                if (it->it_index < PyList_GET_SIZE(seq)) {
-                    PyObject *next = PyList_GET_ITEM(seq, it->it_index++);
-                    PUSH(Py_NewRef(next));
-                    JUMPBY(INLINE_CACHE_ENTRIES_FOR_ITER);
-                    goto end_for_iter_list;  // End of this instruction
-                }
-                it->it_index = -1;
+            Py_ssize_t index = _Py_atomic_load_ssize_relaxed(&it->it_index);
+            Py_ssize_t size = _Py_atomic_load_ssize_relaxed(&((PyVarObject *)seq)->ob_size);
+            if ((size_t)index < (size_t)size) {
+                PyObject **ob_item = _Py_atomic_load_ptr_relaxed(&seq->ob_item);
+                DEOPT_IF(index >= _PyList_Capacity(ob_item), FOR_ITER);
+                PyObject *next = _Py_TryXFetchRef(&ob_item[index]);
+                DEOPT_IF(next == NULL, FOR_ITER);
+                _Py_atomic_store_ssize_relaxed(&it->it_index, index + 1);
+                PUSH(next);
+                JUMPBY(INLINE_CACHE_ENTRIES_FOR_ITER);
+                goto end_for_iter_list;  // End of this instruction
             }
+            _Py_atomic_store_ssize_relaxed(&it->it_index, -1);
             STACK_SHRINK(1);
             Py_DECREF(it);
             JUMPBY(INLINE_CACHE_ENTRIES_FOR_ITER + oparg + 1);
