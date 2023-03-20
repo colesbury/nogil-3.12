@@ -185,6 +185,9 @@ typedef struct pyruntimestate {
     struct _Py_cached_objects cached_objects;
     struct _Py_static_objects static_objects;
 
+    /* linked list of static code objects */
+    struct _Py_llist_node static_code;
+
     /* The following fields are here to avoid allocation during init.
        The data is exposed through _PyRuntimeState pointer fields.
        These fields should not be accessed directly outside of init.

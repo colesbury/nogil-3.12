@@ -89,6 +89,7 @@ extern "C" {
                 }, \
             }, \
         }, \
+        .static_code = LLIST_INIT(runtime.static_code), \
         ._main_interpreter = _PyInterpreterState_INIT, \
     }
 

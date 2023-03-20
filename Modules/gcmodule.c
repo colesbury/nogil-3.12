@@ -711,6 +711,7 @@ struct update_refs_args {
     PyGC_Head *list;
     int split_keys_marked;
     _PyGC_Reason gc_reason;
+    struct _Py_llist_node heap_code_objects;
 };
 
 // Compute the number of external references to objects in the heap
@@ -754,6 +755,10 @@ update_refs(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size
             gc->_gc_prev &= ~_PyGC_PREV_MASK_FINALIZED;
             return true;
         }
+    }
+    else if (PyCode_Check(op)) {
+        PyCodeObject *co = (PyCodeObject *)op;
+        llist_insert_tail(&arg->heap_code_objects, &co->co_gclist);
     }
 
     if (arg->gc_reason == GC_REASON_SHUTDOWN) {
@@ -1395,6 +1400,50 @@ clear_freelists(PyInterpreterState *interp)
     _PyContext_ClearFreeList(interp);
 }
 
+static void
+code_clear_dead_profile_types(PyCodeObject *co)
+{
+    uint8_t *table = (uint8_t *)PyBytes_AsString(co->_co_profiletable);
+    Py_ssize_t size = PyBytes_Size(co->_co_profiletable);
+    _Py_CODEUNIT *instr = (_Py_CODEUNIT *)_PyCode_CODE(co);
+
+    Py_ssize_t idx = 0;
+    for (Py_ssize_t i = 0; i < size; i++) {
+        if (table[i] == 0) {
+            idx += 255;
+            continue;
+        }
+        idx += table[i];
+
+        uintptr_t *ptr = _Py_ALIGN_UP(&instr[idx + 1], sizeof(void *));
+        PyObject *obj = (PyObject *)(*ptr & ~1);
+        if (obj == NULL) {
+            continue;
+        }
+        assert(_PyObject_IS_IMMORTAL(obj) || _PyObject_IS_GC(obj));
+        if (!_PyObject_IsDeferredOrImmortal(obj)) {
+            *ptr = 0;
+        }
+    }
+}
+
+static void
+clear_dead_profile_types(struct _Py_llist_node *head, int unlink)
+{
+    struct _Py_llist_node *node = head->next;
+    while (node != head) {
+        PyCodeObject *co = llist_data(node, PyCodeObject, co_gclist);
+        assert(PyCode_Check(co));
+        code_clear_dead_profile_types(co);
+
+        struct _Py_llist_node *next = node->next;
+        if (unlink) {
+            memset(node, 0, sizeof(*node));
+        }
+        node = next;
+    }
+}
+
 /* Deduce which objects among "base" are unreachable from outside the list
    and move them to 'unreachable'. The process consist in the following steps:
 
@@ -1606,6 +1655,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
         .list = &young,
         .split_keys_marked = 0,
         .gc_reason = reason,
+        .heap_code_objects = LLIST_INIT(args.heap_code_objects),
     };
     visit_heaps2(mi_heap_tag_gc, update_refs, &args);
 
@@ -1645,6 +1695,9 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     /* Clear weakrefs and invoke callbacks as necessary. */
     gc_list_init(&wrcb_to_call);
     clear_weakrefs(&unreachable, &wrcb_to_call);
+
+    clear_dead_profile_types(&_PyRuntime.static_code, /*unlink=*/0);
+    clear_dead_profile_types(&args.heap_code_objects, /*unlink=*/1);
 
     validate_list(&unreachable, unreachable_set);
 

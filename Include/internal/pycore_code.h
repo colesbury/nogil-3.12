@@ -6,6 +6,13 @@ extern "C" {
 
 #define CODE_MAX_WATCHERS 8
 
+typedef struct _PyCodeArray {
+    int is_static : 1;
+    uint32_t size;
+    // TODO: tree node
+    char code[];
+} _PyCodeArray;
+
 /* PEP 659
  * Specialization and quickening structs and helper functions
  */
@@ -67,8 +74,16 @@ typedef struct {
     uint16_t descr[4];
 } _PyLoadMethodCache;
 
+typedef struct {
+    uintptr_t profiled;
+} _PyAttrProfileCache;
 
-// MUST be the max(_PyAttrCache, _PyLoadMethodCache)
+typedef struct {
+    uint16_t padding[3];
+    _PyAttrProfileCache profiled;
+} _PyAttrProfileCachePadded;
+
+// MUST be the max(_PyAttrCache, _PyLoadMethodCache, _PyAttrProfileCache)
 #define INLINE_CACHE_ENTRIES_LOAD_ATTR CACHE_ENTRIES(_PyLoadMethodCache)
 
 #define INLINE_CACHE_ENTRIES_STORE_ATTR CACHE_ENTRIES(_PyAttrCache)
@@ -156,6 +171,7 @@ struct _PyCodeConstructor {
     PyObject *code;
     int firstlineno;
     PyObject *linetable;
+    PyObject *profiletable;
 
     /* used by the code */
     PyObject *consts;

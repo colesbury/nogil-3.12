@@ -558,6 +558,7 @@ assign_version_tag(PyTypeObject *type)
 
 static PyMemberDef type_members[] = {
     {"__basicsize__", T_PYSSIZET, offsetof(PyTypeObject,tp_basicsize),READONLY},
+    {"__versiontag__", T_UINT, offsetof(PyTypeObject,tp_version_tag),READONLY},
     {"__itemsize__", T_PYSSIZET, offsetof(PyTypeObject, tp_itemsize), READONLY},
     {"__flags__", T_ULONG, offsetof(PyTypeObject, tp_flags), READONLY},
     /* Note that this value is misleading for static builtin types,

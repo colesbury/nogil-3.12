@@ -572,6 +572,7 @@ w_complex_object(PyObject *v, char flag, WFILE *p)
         w_long(co->co_firstlineno, p);
         w_object(co->co_linetable, p);
         w_object(co->co_exceptiontable, p);
+        w_object(co->_co_profiletable, p);
         Py_DECREF(co_code);
     }
     else if (PyObject_CheckBuffer(v)) {
@@ -1354,6 +1355,7 @@ r_object(RFILE *p)
             int firstlineno;
             PyObject* linetable = NULL;
             PyObject *exceptiontable = NULL;
+            PyObject *profiletable = NULL;
 
             idx = r_ref_reserve(flag, p);
             if (idx < 0)
@@ -1411,6 +1413,10 @@ r_object(RFILE *p)
             exceptiontable = r_object(p);
             if (exceptiontable == NULL)
                 goto code_error;
+            profiletable = r_object(p);
+            if (profiletable == NULL)
+                goto code_error;
+            assert(PyBytes_Check(profiletable));
 
             struct _PyCodeConstructor con = {
                 .filename = filename,
@@ -1435,6 +1441,7 @@ r_object(RFILE *p)
                 .stacksize = stacksize,
 
                 .exceptiontable = exceptiontable,
+                .profiletable = profiletable,
             };
 
             if (_PyCode_Validate(&con) < 0) {
@@ -1459,6 +1466,7 @@ r_object(RFILE *p)
             Py_XDECREF(qualname);
             Py_XDECREF(linetable);
             Py_XDECREF(exceptiontable);
+            Py_XDECREF(profiletable);
         }
         retval = v;
         break;

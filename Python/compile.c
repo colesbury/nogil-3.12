@@ -43,6 +43,7 @@
 #define DEFAULT_CODE_SIZE 128
 #define DEFAULT_LNOTAB_SIZE 16
 #define DEFAULT_CNOTAB_SIZE 32
+#define DEFAULT_PROFILE_TABLE_SIZE 32
 
 #define COMP_GENEXP   0
 #define COMP_LISTCOMP 1
@@ -7075,6 +7076,7 @@ struct assembler {
     int a_lineno;          /* lineno of last emitted instruction */
     PyObject* a_linetable; /* bytes containing location info */
     int a_location_off;    /* offset of last written location info frame */
+    PyObject *a_profiletable; /* table of offsets of profiled instructions */
 };
 
 static basicblock**
@@ -7209,6 +7211,7 @@ assemble_free(struct assembler *a)
     Py_XDECREF(a->a_bytecode);
     Py_XDECREF(a->a_linetable);
     Py_XDECREF(a->a_except_table);
+    Py_XDECREF(a->a_profiletable);
 }
 
 static int
@@ -8356,6 +8359,7 @@ makecode(struct compiler *c, struct assembler *a, PyObject *constslist,
         .stacksize = maxdepth,
 
         .exceptiontable = a->a_except_table,
+        .profiletable = a->a_profiletable,
     };
 
     if (_PyCode_Validate(&con) < 0) {
@@ -8759,6 +8763,9 @@ add_return_at_end_of_block(struct compiler *c, int addNone)
     return SUCCESS;
 }
 
+// This is in codeobject.c.
+extern PyObject *_Py_compute_profiletable(PyObject *);
+
 static PyCodeObject *
 assemble(struct compiler *c, int addNone)
 {
@@ -8919,7 +8926,10 @@ assemble(struct compiler *c, int addNone)
     if (merge_const_one(c->c_const_cache, &a.a_bytecode) < 0) {
         goto error;
     }
-
+    a.a_profiletable = _Py_compute_profiletable(a.a_bytecode);
+    if (a.a_profiletable == NULL) {
+        goto error;
+    }
     co = makecode(c, &a, consts, maxdepth, nlocalsplus, code_flags);
  error:
     Py_XDECREF(consts);

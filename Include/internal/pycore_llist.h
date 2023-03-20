@@ -11,6 +11,9 @@ extern "C" {
 #  error "Py_BUILD_CORE must be defined to include this header"
 #endif
 
+// FIXME(sgross): rename uses of _llist_node to Py_llist_node
+#define llist_node _Py_llist_node
+
 #define llist_data(node, type, member) \
     (type*)((char*)node - offsetof(type, member))
 

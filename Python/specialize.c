@@ -271,6 +271,12 @@ _PyCode_Quicken(PyCodeObject *code)
     for (int i = 0; i < Py_SIZE(code); i++) {
         int opcode = _PyOpcode_Deopt[_Py_OPCODE(instructions[i])];
         int caches = _PyOpcode_Caches[opcode];
+        if (opcode == LOAD_ATTR) {
+            instructions[i].opcode = LOAD_ATTR_PROFILE;
+            previous_opcode = 0;
+            i += caches;
+            continue;
+        }
         if (caches) {
             instructions[i + 1].cache = adaptive_counter_warmup();
             previous_opcode = 0;

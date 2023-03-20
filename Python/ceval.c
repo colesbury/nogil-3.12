@@ -734,6 +734,23 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
         goto handle_eval_breaker; \
     }
 
+static inline void
+PROFILE(uintptr_t *ptr, PyObject *obj, int flag)
+{
+    uintptr_t cur = _Py_atomic_load_uintptr_relaxed(ptr);
+    uintptr_t val = ((uintptr_t)obj) + flag;
+    if (cur != val) {
+        if (cur == 0 && _PyObject_IsDeferredOrImmortal(obj)) {
+            _Py_atomic_store_uintptr_relaxed(ptr, val);
+        }
+        else if (cur != 1) {
+            _Py_atomic_store_uintptr_relaxed(ptr, 1);
+        }
+    }
+}
+
+#define PROFILE_INSTANCE(ptr, obj) PROFILE(ptr, obj, 1)
+#define PROFILE_TYPE(ptr, obj) PROFILE(ptr, _PyObject_CAST(Py_TYPE(obj)), 0)
 
 /* Tuple access macros */
 
@@ -1302,7 +1319,7 @@ handle_eval_breaker:
             PRE_DISPATCH_GOTO();
         }
         opcode = _PyOpcode_Deopt[opcode];
-        if (_PyOpcode_Caches[opcode]) {
+        if (opcode != LOAD_ATTR && _PyOpcode_Caches[opcode]) {
             uint16_t *counter = &next_instr[1].cache;
             // The instruction is going to decrement the counter, so we need to
             // increment it here to make sure it doesn't try to specialize:

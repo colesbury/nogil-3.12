@@ -1719,19 +1719,21 @@
             DISPATCH();
         }
 
+        TARGET(LOAD_ATTR_PROFILE) {
+            _PyAttrProfileCache *cache = _Py_ALIGN_UP(next_instr, sizeof(void*));
+            PyObject *owner = TOP();
+            if (PyModule_CheckExact(owner) || PyType_Check(owner)) {
+                PROFILE_INSTANCE(&cache->profiled, owner);
+            }
+            else {
+                PROFILE_TYPE(&cache->profiled, owner);
+            }
+            GO_TO_INSTRUCTION(LOAD_ATTR);
+        }
+
         TARGET(LOAD_ATTR) {
             PREDICTED(LOAD_ATTR);
-            _PyAttrCache *cache = (_PyAttrCache *)next_instr;
-            if (ADAPTIVE_COUNTER_IS_ZERO(cache->counter)) {
-                assert(cframe.use_tracing == 0);
-                PyObject *owner = TOP();
-                PyObject *name = GETITEM(names, oparg>>1);
-                next_instr--;
-                _Py_Specialize_LoadAttr(owner, next_instr, name);
-                DISPATCH_SAME_OPARG();
-            }
             STAT_INC(LOAD_ATTR, deferred);
-            DECREMENT_ADAPTIVE_COUNTER(cache->counter);
             PyObject *name = GETITEM(names, oparg >> 1);
             PyObject *owner = TOP();
             if (oparg & 1) {

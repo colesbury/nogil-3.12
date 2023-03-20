@@ -61,6 +61,7 @@ def main():
 
     text = read_text(inpath)
     marshalled = compile_and_marshal(name, text)
+    assert marshal.loads(marshalled) is not None
     write_frozen(outpath, inpath, name, marshalled)
 
 

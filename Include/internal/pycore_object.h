@@ -388,6 +388,13 @@ _Py_REF_NON_IMMEDIATE(uint32_t local)
     return _Py_STATIC_CAST(int32_t, local) <= Py_REF_IMMORTAL;
 }
 
+static inline int
+_PyObject_IsDeferredOrImmortal(PyObject *op)
+{
+    uint32_t local = _Py_atomic_load_uint32_relaxed(&op->ob_ref_local);
+    return _Py_REF_NON_IMMEDIATE(local);
+}
+
 #ifdef Py_REF_DEBUG
 extern void _PyDebug_PrintTotalRefs(void);
 #endif

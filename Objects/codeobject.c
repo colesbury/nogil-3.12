@@ -236,6 +236,62 @@ init_co_cached(PyCodeObject *self) {
  * _PyCode_New()
  ******************/
 
+static int
+add_profiled_instr_single(PyObject **table, int *idx, int value)
+{
+    assert(value >= 0 && value <= 255);
+
+    Py_ssize_t len = PyBytes_GET_SIZE(*table);
+    if (*idx >= len) {
+        if (_PyBytes_Resize(table, len * 2) < 0) {
+            return -1;
+        }
+    }
+
+    uint8_t *data = (uint8_t *)PyBytes_AsString(*table);
+    data[(*idx)++] = (uint8_t)value;
+    return 0;
+}
+
+static int
+add_profiled_instr(PyObject **table, int *idx, int value)
+{
+    assert(value > 0);
+    while (value > 255) {
+        if (add_profiled_instr_single(table, idx, 0) < 0) {
+            return -1;
+        }
+        value -= 255;
+    }
+    return add_profiled_instr_single(table, idx, value);
+}
+
+// This is also used in compile.c.
+PyObject *
+_Py_compute_profiletable(PyObject *bytecode)
+{
+    Py_ssize_t size = PyBytes_Size(bytecode) / sizeof(_Py_CODEUNIT);
+    _Py_CODEUNIT *code = (_Py_CODEUNIT *)PyBytes_AsString(bytecode);
+
+    PyObject *table = PyBytes_FromStringAndSize(NULL, 32);
+    int len = 0;
+
+    Py_ssize_t last = 0;
+    for (Py_ssize_t i = 1; i < size; i++) {
+        int opcode = code[i].opcode;
+        if (opcode == LOAD_ATTR) {
+            if (add_profiled_instr(&table, &len, i - last) < 0) {
+                Py_XDECREF(table);
+                return NULL;
+            }
+            last = i;
+        }
+        i += _PyOpcode_Caches[opcode];
+    }
+    _PyBytes_Resize(&table, len);
+    return table;
+}
+
 // This is also used in compile.c.
 void
 _Py_set_localsplus_info(int offset, PyObject *name, _PyLocals_Kind kind,
@@ -363,7 +419,7 @@ _PyCode_Validate(struct _PyCodeConstructor *con)
 extern void _PyCode_Quicken(PyCodeObject *code);
 
 static void
-init_code(PyCodeObject *co, struct _PyCodeConstructor *con)
+init_code(PyCodeObject *co, struct _PyCodeConstructor *con, _PyCodeArray *code_array)
 {
     int nlocalsplus = (int)PyTuple_GET_SIZE(con->localsplusnames);
     int nlocals, ncellvars, nfreevars;
@@ -402,6 +458,7 @@ init_code(PyCodeObject *co, struct _PyCodeConstructor *con)
     if (_Py_next_func_version != 0) {
         _Py_next_func_version++;
     }
+    co->_co_profiletable = Py_NewRef(con->profiletable);
     /* not set */
     co->co_weakreflist = NULL;
     co->co_extra = NULL;
@@ -409,14 +466,16 @@ init_code(PyCodeObject *co, struct _PyCodeConstructor *con)
 
     co->_co_linearray_entry_size = 0;
     co->_co_linearray = NULL;
-    memcpy(_PyCode_CODE(co), PyBytes_AS_STRING(con->code),
+    memcpy(code_array->code, PyBytes_AS_STRING(con->code),
            PyBytes_GET_SIZE(con->code));
+    co->co_code_adaptive = code_array->code;
     int entry_point = 0;
     while (entry_point < Py_SIZE(co) &&
         _Py_OPCODE(_PyCode_CODE(co)[entry_point]) != RESUME) {
         entry_point++;
     }
     co->_co_firsttraceable = entry_point;
+    memset(&co->co_mutex, 0, sizeof(co->co_mutex));
     _PyCode_Quicken(co);
     notify_code_watchers(PY_CODE_EVENT_CREATE, co);
 }
@@ -550,14 +609,26 @@ _PyCode_New(struct _PyCodeConstructor *con)
     }
 
     Py_ssize_t size = PyBytes_GET_SIZE(con->code) / sizeof(_Py_CODEUNIT);
-    PyCodeObject *co = PyObject_GC_NewVar(PyCodeObject, &PyCode_Type, size);
-    if (co == NULL) {
+    _PyCodeArray *code_array = PyMem_Malloc(sizeof(_PyCodeArray) + PyBytes_GET_SIZE(con->code));
+    code_array->is_static = 0;
+    code_array->size = size;
+    if (code_array == NULL) {
         Py_XDECREF(replacement_locations);
         PyErr_NoMemory();
         return NULL;
     }
-    init_code(co, con);
+
+    PyCodeObject *co = PyObject_GC_New(PyCodeObject, &PyCode_Type);
+    if (co == NULL) {
+        PyMem_Free(code_array);
+        Py_XDECREF(replacement_locations);
+        PyErr_NoMemory();
+        return NULL;
+    }
+    Py_SET_SIZE(co, size);
+    init_code(co, con, code_array);
     Py_XDECREF(replacement_locations);
+    PyObject_GC_Track(co);
     return co;
 }
 
@@ -579,6 +650,7 @@ PyCode_NewWithPosOnlyArgs(int argcount, int posonlyargcount, int kwonlyargcount,
     PyCodeObject *co = NULL;
     PyObject *localsplusnames = NULL;
     PyObject *localspluskinds = NULL;
+    PyObject *profiletable = NULL;
 
     if (varnames == NULL || !PyTuple_Check(varnames) ||
         cellvars == NULL || !PyTuple_Check(cellvars) ||
@@ -642,6 +714,10 @@ PyCode_NewWithPosOnlyArgs(int argcount, int posonlyargcount, int kwonlyargcount,
             goto error;
         }
     }
+    profiletable = _Py_compute_profiletable(code);
+    if (profiletable == NULL) {
+        goto error;
+    }
 
     struct _PyCodeConstructor con = {
         .filename = filename,
@@ -666,6 +742,7 @@ PyCode_NewWithPosOnlyArgs(int argcount, int posonlyargcount, int kwonlyargcount,
         .stacksize = stacksize,
 
         .exceptiontable = exceptiontable,
+        .profiletable = profiletable,
     };
 
     if (_PyCode_Validate(&con) < 0) {
@@ -687,6 +764,7 @@ PyCode_NewWithPosOnlyArgs(int argcount, int posonlyargcount, int kwonlyargcount,
 error:
     Py_XDECREF(localsplusnames);
     Py_XDECREF(localspluskinds);
+    Py_XDECREF(profiletable);
     return co;
 }
 
@@ -768,6 +846,7 @@ PyCode_NewEmpty(const char *filename, const char *funcname, int firstlineno)
         .localsplusnames = nulltuple,
         .localspluskinds = emptystring,
         .exceptiontable = emptystring,
+        .profiletable = emptystring,
         .stacksize = 1,
     };
     result = _PyCode_New(&con);
@@ -1666,6 +1745,7 @@ code_new_impl(PyTypeObject *type, int argcount, int posonlyargcount,
 static void
 code_dealloc(PyCodeObject *co)
 {
+    PyObject_GC_UnTrack(co);
     notify_code_watchers(PY_CODE_EVENT_DESTROY, co);
 
     if (co->co_extra != NULL) {
@@ -1692,6 +1772,7 @@ code_dealloc(PyCodeObject *co)
     Py_XDECREF(co->co_qualname);
     Py_XDECREF(co->co_linetable);
     Py_XDECREF(co->co_exceptiontable);
+    Py_XDECREF(co->_co_profiletable);
     if (co->_co_cached != NULL) {
         Py_XDECREF(co->_co_cached->_co_code);
         Py_XDECREF(co->_co_cached->_co_cellvars);
@@ -1704,6 +1785,10 @@ code_dealloc(PyCodeObject *co)
     }
     if (co->_co_linearray) {
         PyMem_Free(co->_co_linearray);
+    }
+    _PyCodeArray *array = (_PyCodeArray *)(co->co_code_adaptive - offsetof(_PyCodeArray, code));
+    if (!array->is_static) {
+        PyMem_Free(array);
     }
     PyObject_GC_Del(co);
 }
@@ -1892,6 +1977,7 @@ static PyMemberDef code_memberlist[] = {
     {"co_firstlineno",     T_INT,    OFF(co_firstlineno),     READONLY},
     {"co_linetable",       T_OBJECT, OFF(co_linetable),       READONLY},
     {"co_exceptiontable",  T_OBJECT, OFF(co_exceptiontable),  READONLY},
+    {"_co_profiletable" ,  T_OBJECT, OFF(_co_profiletable),   READONLY},
     {NULL}      /* Sentinel */
 };
 
@@ -1923,7 +2009,7 @@ code_getfreevars(PyCodeObject *code, void *closure)
 static PyObject *
 code_getcodeadaptive(PyCodeObject *code, void *closure)
 {
-    return PyBytes_FromStringAndSize(code->co_code_adaptive,
+    return PyBytes_FromStringAndSize((const char *)code->co_code_adaptive,
                                      _PyCode_NBYTES(code));
 }
 
@@ -2112,8 +2198,8 @@ static struct PyMethodDef code_methods[] = {
 PyTypeObject PyCode_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "code",
-    offsetof(PyCodeObject, co_code_adaptive),
-    sizeof(_Py_CODEUNIT),
+    sizeof(PyCodeObject),
+    0,
     (destructor)code_dealloc,           /* tp_dealloc */
     0,                                  /* tp_vectorcall_offset */
     0,                                  /* tp_getattr */
@@ -2308,6 +2394,7 @@ _PyStaticCode_Fini(PyCodeObject *co)
         PyMem_Free(co->_co_linearray);
         co->_co_linearray = NULL;
     }
+    llist_remove(&co->co_gclist);
 }
 
 int
@@ -2325,6 +2412,7 @@ _PyStaticCode_Init(PyCodeObject *co)
     if (res < 0) {
         return -1;
     }
+    llist_insert_tail(&_PyRuntime.static_code, &co->co_gclist);
     _PyCode_Quicken(co);
     return 0;
 }
@@ -2394,6 +2482,7 @@ _Py_MakeShimCode(const _PyShimCodeDef *codedef)
         .stacksize = codedef->stacksize,
 
         .exceptiontable = (PyObject *)&_Py_SINGLETON(bytes_empty),
+        .profiletable =  (PyObject *)&_Py_SINGLETON(bytes_empty),
     };
 
     codeobj = _PyCode_New(&con);

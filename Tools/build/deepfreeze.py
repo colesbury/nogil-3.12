@@ -40,6 +40,14 @@ def make_string_literal(b: bytes) -> str:
     return "".join(res)
 
 
+def make_uint16_array(b: bytes) -> str:
+    res = []
+    for i, j in zip(b[::2], b[1::2]):
+        val = (i << 8) + j
+        res.append(f"{val:#06x}")
+    return "{ " + (", ".join(res)) + " }"
+
+
 CO_FAST_LOCAL = 0x20
 CO_FAST_CELL = 0x40
 CO_FAST_FREE = 0x80
@@ -243,11 +251,16 @@ class Printer:
         # Derived values
         nlocals, ncellvars, nfreevars = \
             get_localsplus_counts(code, localsplusnames, localspluskinds)
-        co_code_adaptive = make_string_literal(code.co_code)
+
+        code_array = self.generate_code_array(name + "_code", code.co_code)
+        co_profiletable = self.generate(name + "_profiletable", code._co_profiletable)
+
         self.write("static")
         with self.indent():
-            self.write(f"struct _PyCode_DEF({len(code.co_code)})")
-        with self.block(f"{name} =", ";"):
+            with self.block("struct"):
+                self.write("_PyGC_Head_UNUSED _gc_head;")
+                self.write(f"struct PyCodeObject code;")
+        with self.block(f"{name} =", ";"), self.block(".code ="):
             self.object_var_head("PyCode_Type", len(code.co_code) // 2)
             # But the ordering here must match that in cpython/code.h
             # (which is a pain because we tend to reorder those for perf)
@@ -278,15 +291,16 @@ class Printer:
             self.write(f".co_linetable = {co_linetable},")
             self.write(f"._co_cached = NULL,")
             self.write("._co_linearray = NULL,")
-            self.write(f".co_code_adaptive = {co_code_adaptive},")
+            self.write(f"._co_profiletable = {co_profiletable},")
+            self.write(f".co_code_adaptive = {code_array},")
             for i, op in enumerate(code.co_code[::2]):
                 if op == RESUME:
                     self.write(f"._co_firsttraceable = {i},")
                     break
-        name_as_code = f"(PyCodeObject *)&{name}"
+        name_as_code = f"&{name}.code"
         self.finis.append(f"_PyStaticCode_Fini({name_as_code});")
         self.inits.append(f"_PyStaticCode_Init({name_as_code})")
-        return f"& {name}.ob_base.ob_base"
+        return f"& {name}.code.ob_base.ob_base"
 
     def generate_tuple(self, name: str, t: Tuple[object, ...]) -> str:
         if len(t) == 0:
@@ -375,6 +389,13 @@ class Printer:
         self.generate(f"{module}_toplevel", code)
         self.write(EPILOGUE.format(name=module))
 
+    def generate_code_array(self, name: str, code: bytes) -> str:
+        with self.block(f"static _PyCodeArray {name} =", ";"):
+            self.write(f".is_static = 1,")
+            self.write(f".size = { len(code) // 2 },")
+            self.write(f".code = { make_string_literal(code) },")
+        return f"{name}.code"
+
     def generate(self, name: str, obj: object) -> str:
         # Use repr() in the key to distinguish -0.0 from +0.0
         key = (type(obj), obj, repr(obj))
@@ -419,7 +440,7 @@ EPILOGUE = """
 PyObject *
 _Py_get_{name}_toplevel(void)
 {{
-    return Py_NewRef((PyObject *) &{name}_toplevel);
+    return Py_NewRef((PyObject *) &{name}_toplevel.code);
 }}
 """
 

@@ -70,6 +70,9 @@ do { \
 #define GO_TO_INSTRUCTION(instname) ((void)0)
 #define DISPATCH_SAME_OPARG() ((void)0)
 
+#define PROFILE_INSTANCE(ptr, obj) ((void)0)
+#define PROFILE_TYPE(ptr, obj) ((void)0)
+
 #define inst(name, ...) case name:
 #define op(name, ...) /* NAME is ignored */
 #define macro(name) static int MACRO_##name
@@ -1491,19 +1494,22 @@ dummy_func(
             PREDICT(JUMP_BACKWARD);
         }
 
+        // error: LOAD_ATTR_PROFILE has irregular stack effect
+        inst(LOAD_ATTR_PROFILE) {
+            _PyAttrProfileCache *cache = _Py_ALIGN_UP(next_instr, sizeof(void*));
+            PyObject *owner = TOP();
+            if (PyModule_CheckExact(owner) || PyType_Check(owner)) {
+                PROFILE_INSTANCE(&cache->profiled, owner);
+            }
+            else {
+                PROFILE_TYPE(&cache->profiled, owner);
+            }
+            GO_TO_INSTRUCTION(LOAD_ATTR);
+        }
+
         // error: LOAD_ATTR has irregular stack effect
         inst(LOAD_ATTR) {
-            _PyAttrCache *cache = (_PyAttrCache *)next_instr;
-            if (ADAPTIVE_COUNTER_IS_ZERO(cache->counter)) {
-                assert(cframe.use_tracing == 0);
-                PyObject *owner = TOP();
-                PyObject *name = GETITEM(names, oparg>>1);
-                next_instr--;
-                _Py_Specialize_LoadAttr(owner, next_instr, name);
-                DISPATCH_SAME_OPARG();
-            }
             STAT_INC(LOAD_ATTR, deferred);
-            DECREMENT_ADAPTIVE_COUNTER(cache->counter);
             PyObject *name = GETITEM(names, oparg >> 1);
             PyObject *owner = TOP();
             if (oparg & 1) {
