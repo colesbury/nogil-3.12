@@ -1812,15 +1812,14 @@
             DEOPT_IF(!PyModule_CheckExact(owner), LOAD_ATTR);
             PyDictObject *dict = (PyDictObject *)((PyModuleObject *)owner)->md_dict;
             assert(dict != NULL);
-            DEOPT_IF(dict->ma_keys->dk_version != read_u32(cache->version),
-                LOAD_ATTR);
-            assert(dict->ma_keys->dk_kind == DICT_KEYS_UNICODE);
-            assert(cache->index < dict->ma_keys->dk_nentries);
-            PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(dict->ma_keys) + cache->index;
-            res = ep->me_value;
+            PyDictKeysObject *keys = _Py_atomic_load_ptr_relaxed(&dict->ma_keys);
+            DEOPT_IF(keys->dk_version != read_u32(cache->version), LOAD_ATTR);
+            assert(keys->dk_kind == DICT_KEYS_UNICODE);
+            assert(cache->index < keys->dk_nentries);
+            PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(keys) + cache->index;
+            res = _Py_TryXFetchRef(&ep->me_value);
             DEOPT_IF(res == NULL, LOAD_ATTR);
             STAT_INC(LOAD_ATTR, hit);
-            Py_INCREF(res);
             SET_TOP(NULL);
             STACK_GROW((oparg & 1));
             SET_TOP(res);
@@ -1985,18 +1984,17 @@
             assert(type_version != 0);
             DEOPT_IF(tp->tp_version_tag != type_version, STORE_ATTR);
             assert(tp->tp_flags & Py_TPFLAGS_MANAGED_DICT);
-            PyDictOrValues dorv = *_PyObject_DictOrValuesPointer(owner);
-            DEOPT_IF(!_PyDictOrValues_IsValues(dorv), STORE_ATTR);
+            PyDictOrValues *dorv_ptr = _PyObject_DictOrValuesPointer(owner);
+            PyDictValues *values = _PyDictValues_Lock(dorv_ptr);
+            DEOPT_IF(values == NULL, STORE_ATTR);
             STAT_INC(STORE_ATTR, hit);
-            PyDictValues *values = _PyDictOrValues_GetValues(dorv);
             PyObject *old_value = values->values[index];
-            values->values[index] = value;
+            _Py_atomic_store_ptr_release(&values->values[index], value);
             if (old_value == NULL) {
                 _PyDictValues_AddToInsertionOrder(values, index);
             }
-            else {
-                Py_DECREF(old_value);
-            }
+            _PyDictValues_Unlock(dorv_ptr);
+            Py_XDECREF(old_value);
             Py_DECREF(owner);
             STACK_SHRINK(2);
             JUMPBY(4);
