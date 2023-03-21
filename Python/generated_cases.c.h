@@ -1720,15 +1720,17 @@
         }
 
         TARGET(LOAD_ATTR_PROFILE) {
-            _PyAttrProfileCache *cache = (_PyAttrProfileCache *)next_instr;
-            PyObject **typeptr = _Py_ALIGN_UP(&cache->profiled_type, sizeof(void *));
+            _PyAttrProfileCache *cache = _Py_ALIGN_UP(next_instr, sizeof(void*));
+            PyObject **typeptr = (PyObject **)&cache->profiled_type;
             PyObject *type = _Py_atomic_load_ptr_relaxed(typeptr);
             PyObject *owner = TOP();
             if (type == NULL) {
                 _Py_atomic_store_ptr_relaxed(typeptr, Py_TYPE(owner));
             }
-            else if (Py_IS_TYPE(owner, type)) {
-                _Py_atomic_store_ptr_relaxed(typeptr, Py_None);
+            else if ((PyObject *)owner->ob_type != type) {
+                if (type != Py_None) {
+                    _Py_atomic_store_ptr_relaxed(typeptr, Py_None);
+                }
             }
             GO_TO_INSTRUCTION(LOAD_ATTR);
         }

@@ -40,6 +40,14 @@ def make_string_literal(b: bytes) -> str:
     return "".join(res)
 
 
+def make_uint16_array(b: bytes) -> str:
+    res = []
+    for i, j in zip(b[::2], b[1::2]):
+        val = (i << 8) + j
+        res.append(f"{val:#06x}")
+    return "{ " + (", ".join(res)) + " }"
+
+
 CO_FAST_LOCAL = 0x20
 CO_FAST_CELL = 0x40
 CO_FAST_FREE = 0x80
@@ -243,7 +251,9 @@ class Printer:
         # Derived values
         nlocals, ncellvars, nfreevars = \
             get_localsplus_counts(code, localsplusnames, localspluskinds)
-        co_code_adaptive = make_string_literal(code.co_code)
+
+        code_array = self.generate_code_array(name + "_code", code.co_code)
+
         self.write("static")
         with self.indent():
             self.write(f"struct _PyCode_DEF({len(code.co_code)})")
@@ -278,7 +288,7 @@ class Printer:
             self.write(f".co_linetable = {co_linetable},")
             self.write(f"._co_cached = NULL,")
             self.write("._co_linearray = NULL,")
-            self.write(f".co_code_adaptive = {co_code_adaptive},")
+            self.write(f".co_code_adaptive = {code_array},")
             for i, op in enumerate(code.co_code[::2]):
                 if op == RESUME:
                     self.write(f"._co_firsttraceable = {i},")
@@ -374,6 +384,13 @@ class Printer:
         module = module.replace(".", "_")
         self.generate(f"{module}_toplevel", code)
         self.write(EPILOGUE.format(name=module))
+
+    def generate_code_array(self, name: str, code: bytes) -> str:
+        with self.block(f"static _PyCodeArray {name} =", ";"):
+            self.write(f".is_static = 1,")
+            self.write(f".size = { len(code) // 2 },")
+            self.write(f".code = { make_string_literal(code) },")
+        return f"{name}.code"
 
     def generate(self, name: str, obj: object) -> str:
         # Use repr() in the key to distinguish -0.0 from +0.0

@@ -363,7 +363,7 @@ _PyCode_Validate(struct _PyCodeConstructor *con)
 extern void _PyCode_Quicken(PyCodeObject *code);
 
 static void
-init_code(PyCodeObject *co, struct _PyCodeConstructor *con)
+init_code(PyCodeObject *co, struct _PyCodeConstructor *con, _PyCodeArray *code_array)
 {
     int nlocalsplus = (int)PyTuple_GET_SIZE(con->localsplusnames);
     int nlocals, ncellvars, nfreevars;
@@ -409,8 +409,9 @@ init_code(PyCodeObject *co, struct _PyCodeConstructor *con)
 
     co->_co_linearray_entry_size = 0;
     co->_co_linearray = NULL;
-    memcpy(_PyCode_CODE(co), PyBytes_AS_STRING(con->code),
+    memcpy(code_array->code, PyBytes_AS_STRING(con->code),
            PyBytes_GET_SIZE(con->code));
+    co->co_code_adaptive = code_array->code;
     int entry_point = 0;
     while (entry_point < Py_SIZE(co) &&
         _Py_OPCODE(_PyCode_CODE(co)[entry_point]) != RESUME) {
@@ -550,13 +551,23 @@ _PyCode_New(struct _PyCodeConstructor *con)
     }
 
     Py_ssize_t size = PyBytes_GET_SIZE(con->code) / sizeof(_Py_CODEUNIT);
-    PyCodeObject *co = PyObject_GC_NewVar(PyCodeObject, &PyCode_Type, size);
-    if (co == NULL) {
+    _PyCodeArray *code_array = PyMem_Malloc(sizeof(_PyCodeArray) + PyBytes_GET_SIZE(con->code));
+    code_array->is_static = 0;
+    code_array->size = size;
+    if (code_array == NULL) {
         Py_XDECREF(replacement_locations);
         PyErr_NoMemory();
         return NULL;
     }
-    init_code(co, con);
+
+    PyCodeObject *co = PyObject_GC_NewVar(PyCodeObject, &PyCode_Type, size);
+    if (co == NULL) {
+        PyMem_Free(code_array);
+        Py_XDECREF(replacement_locations);
+        PyErr_NoMemory();
+        return NULL;
+    }
+    init_code(co, con, code_array);
     Py_XDECREF(replacement_locations);
     return co;
 }
@@ -1705,6 +1716,10 @@ code_dealloc(PyCodeObject *co)
     if (co->_co_linearray) {
         PyMem_Free(co->_co_linearray);
     }
+    _PyCodeArray *array = (_PyCodeArray *)(co->co_code_adaptive - offsetof(_PyCodeArray, code));
+    if (!array->is_static) {
+        PyMem_Free(array);
+    }
     PyObject_GC_Del(co);
 }
 
@@ -1923,7 +1938,7 @@ code_getfreevars(PyCodeObject *code, void *closure)
 static PyObject *
 code_getcodeadaptive(PyCodeObject *code, void *closure)
 {
-    return PyBytes_FromStringAndSize(code->co_code_adaptive,
+    return PyBytes_FromStringAndSize((const char *)code->co_code_adaptive,
                                      _PyCode_NBYTES(code));
 }
 
