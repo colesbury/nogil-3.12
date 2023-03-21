@@ -1792,10 +1792,10 @@
             assert(tp->tp_flags & Py_TPFLAGS_MANAGED_DICT);
             PyDictOrValues dorv = *_PyObject_DictOrValuesPointer(owner);
             DEOPT_IF(!_PyDictOrValues_IsValues(dorv), LOAD_ATTR);
-            res = _PyDictOrValues_GetValues(dorv)->values[cache->index];
+            PyDictValues *dv = _PyDictOrValues_GetValues(dorv);
+            res = _Py_TryXFetchRef(&dv->values[cache->index]);
             DEOPT_IF(res == NULL, LOAD_ATTR);
             STAT_INC(LOAD_ATTR, hit);
-            Py_INCREF(res);
             SET_TOP(NULL);
             STACK_GROW((oparg & 1));
             SET_TOP(res);
