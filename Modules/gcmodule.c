@@ -1543,16 +1543,18 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
         return 0;
     }
 
-    if (!_Py_atomic_compare_exchange_int(&gcstate->collecting, 0, 1)) {
+    if (!_Py_atomic_compare_exchange_int(&_PyRuntime.gc_collecting, 0, 1)) {
         // Don't start a garbage collection if a collection is already in
         // progress.
         return 0;
     }
 
     if (!gc_reason_is_valid(gcstate, reason)) {
-        _Py_atomic_store_int(&gcstate->collecting, 0);
+        _Py_atomic_store_int(&_PyRuntime.gc_collecting, 0);
         return 0;
     }
+
+    _Py_atomic_store_int(&gcstate->collecting, 1);
 
     _PyMutex_lock(&_PyRuntime.stoptheworld_mutex);
     _PyRuntimeState_StopTheWorld(&_PyRuntime);
@@ -1578,7 +1580,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
      * threads are resumed.
      */
     merge_queued_objects(&to_dealloc);
-    validate_tracked_heap(_PyGC_PREV_MASK_UNREACHABLE, 0);
+    validate_tracked_heap(_PyGC_PREV_MASK|_PyGC_PREV_MASK_UNREACHABLE, 0);
 
     gc_list_init(&young);
     struct update_refs_args args = { .list = &young, .split_keys_marked = 0 };
@@ -1713,7 +1715,8 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
         invoke_gc_callback(tstate, "stop", m, n);
     }
 
-    _Py_atomic_store_int32(&gcstate->collecting, 0);
+    _Py_atomic_store_int(&gcstate->collecting, 0);
+    _Py_atomic_store_int(&_PyRuntime.gc_collecting, 0);
     return n + m;
 }
 

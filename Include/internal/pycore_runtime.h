@@ -89,6 +89,8 @@ typedef struct pyruntimestate {
     /* Have all Python threads stopped? */
     int stop_the_world;
 
+    int gc_collecting;
+
     /* Set by Py_FinalizeEx(). Only reset to NULL if Py_Initialize()
        is called again.
 
