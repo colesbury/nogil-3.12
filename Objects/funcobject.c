@@ -97,6 +97,10 @@ _PyFunction_FromConstructor(PyFrameConstructor *constr)
     op->func_annotations = NULL;
     op->vectorcall = _PyFunction_Vectorcall;
     op->func_version = 0;
+    PyCodeObject *code = (PyCodeObject *)constr->fc_code;
+    if ((code->co_flags & CO_NESTED) == 0) {
+        _PyObject_SET_DEFERRED_REFCOUNT(op);
+    }
     _PyObject_GC_TRACK(op);
     handle_func_event(PyFunction_EVENT_CREATE, op, NULL);
     return op;
@@ -172,6 +176,9 @@ PyFunction_NewWithQualName(PyObject *code, PyObject *globals, PyObject *qualname
     op->func_annotations = NULL;
     op->vectorcall = _PyFunction_Vectorcall;
     op->func_version = 0;
+    if ((code_obj->co_flags & CO_NESTED) == 0) {
+        _PyObject_SET_DEFERRED_REFCOUNT(op);
+    }
     _PyObject_GC_TRACK(op);
     handle_func_event(PyFunction_EVENT_CREATE, op, NULL);
     return (PyObject *)op;

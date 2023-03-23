@@ -262,6 +262,9 @@ int
 _Py_mro_cache_visit(_Py_mro_cache *cache, visitproc visit, void *arg)
 {
     _Py_mro_cache_entry *entry = cache->buckets;
+    if (entry == NULL) {
+        return 0;
+    }
     Py_ssize_t capacity = capacity_from_mask(cache->mask);
     for (Py_ssize_t i = 0; i < capacity; i++, entry++) {
         if (entry->value) {
