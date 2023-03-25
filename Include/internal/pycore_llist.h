@@ -11,11 +11,6 @@ extern "C" {
 #  error "Py_BUILD_CORE must be defined to include this header"
 #endif
 
-struct llist_node {
-    struct llist_node *next;
-    struct llist_node *prev;
-};
-
 #define llist_data(node, type, member) \
     (type*)((char*)node - offsetof(type, member))
 
