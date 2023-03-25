@@ -418,6 +418,7 @@ init_code(PyCodeObject *co, struct _PyCodeConstructor *con, _PyCodeArray *code_a
         entry_point++;
     }
     co->_co_firsttraceable = entry_point;
+    memset(&co->co_mutex, 0, sizeof(co->co_mutex));
     _PyCode_Quicken(co);
     notify_code_watchers(PY_CODE_EVENT_CREATE, co);
 }

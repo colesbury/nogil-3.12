@@ -256,7 +256,7 @@ class Printer:
 
         self.write("static")
         with self.indent():
-            self.write(f"struct _PyCode_DEF({len(code.co_code)})")
+            self.write(f"struct PyCodeObject")
         with self.block(f"{name} =", ";"):
             self.object_var_head("PyCode_Type", len(code.co_code) // 2)
             # But the ordering here must match that in cpython/code.h
