@@ -550,7 +550,7 @@ _PyCode_New(struct _PyCodeConstructor *con)
     }
 
     Py_ssize_t size = PyBytes_GET_SIZE(con->code) / sizeof(_Py_CODEUNIT);
-    PyCodeObject *co = PyObject_NewVar(PyCodeObject, &PyCode_Type, size);
+    PyCodeObject *co = PyObject_GC_NewVar(PyCodeObject, &PyCode_Type, size);
     if (co == NULL) {
         Py_XDECREF(replacement_locations);
         PyErr_NoMemory();
@@ -1705,7 +1705,7 @@ code_dealloc(PyCodeObject *co)
     if (co->_co_linearray) {
         PyMem_Free(co->_co_linearray);
     }
-    PyObject_Free(co);
+    PyObject_GC_Del(co);
 }
 
 static PyObject *
@@ -1725,6 +1725,21 @@ code_repr(PyCodeObject *co)
             "<code object %U at %p, file ???, line %d>",
             co->co_name, co, lineno);
     }
+}
+
+static int
+code_traverse(PyCodeObject *co, visitproc visit, void *arg)
+{
+    // Code objects can't actually form reference cycles, so
+    // don't bother with code_traverse. We only need GC because
+    // code objects use deferred reference counting.
+    return 0;
+}
+
+static int
+code_is_gc(PyObject *co)
+{
+    return !_PyObject_IS_IMMORTAL(co);
 }
 
 static PyObject *
@@ -2114,9 +2129,9 @@ PyTypeObject PyCode_Type = {
     PyObject_GenericGetAttr,            /* tp_getattro */
     0,                                  /* tp_setattro */
     0,                                  /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT,                 /* tp_flags */
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,    /* tp_flags */
     code_new__doc__,                    /* tp_doc */
-    0,                                  /* tp_traverse */
+    (traverseproc)code_traverse,        /* tp_traverse */
     0,                                  /* tp_clear */
     code_richcompare,                   /* tp_richcompare */
     offsetof(PyCodeObject, co_weakreflist),     /* tp_weaklistoffset */
@@ -2133,6 +2148,8 @@ PyTypeObject PyCode_Type = {
     0,                                  /* tp_init */
     0,                                  /* tp_alloc */
     code_new,                           /* tp_new */
+    0,                                  /* tp_free */
+    code_is_gc,                         /* tp_is_gc */
 };
 
 
