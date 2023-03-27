@@ -561,13 +561,14 @@ _PyCode_New(struct _PyCodeConstructor *con)
         return NULL;
     }
 
-    PyCodeObject *co = PyObject_GC_NewVar(PyCodeObject, &PyCode_Type, size);
+    PyCodeObject *co = PyObject_GC_New(PyCodeObject, &PyCode_Type);
     if (co == NULL) {
         PyMem_Free(code_array);
         Py_XDECREF(replacement_locations);
         PyErr_NoMemory();
         return NULL;
     }
+    Py_SET_SIZE(co, size);
     init_code(co, con, code_array);
     Py_XDECREF(replacement_locations);
     return co;
@@ -2128,8 +2129,8 @@ static struct PyMethodDef code_methods[] = {
 PyTypeObject PyCode_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "code",
-    offsetof(PyCodeObject, co_code_adaptive),
-    sizeof(_Py_CODEUNIT),
+    sizeof(PyCodeObject),
+    0,
     (destructor)code_dealloc,           /* tp_dealloc */
     0,                                  /* tp_vectorcall_offset */
     0,                                  /* tp_getattr */

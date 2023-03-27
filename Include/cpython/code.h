@@ -90,6 +90,7 @@ struct PyCodeObject {
     int co_ncellvars;             /* total number of cell variables */
     int co_nfreevars;             /* number of free variables */
     uint32_t co_version;          /* version number */
+    uint32_t _co_profilearray_size;
     _PyMutex co_mutex;
     uint32_t co_counter;
 
@@ -104,6 +105,7 @@ struct PyCodeObject {
     _PyCoCached *_co_cached;      /* cached co_* attributes */
     int _co_firsttraceable;       /* index of first traceable instruction */
     char *_co_linearray;          /* array of line offsets */
+    uint32_t *_co_profilearray;   /* array of profiled opcodes */
     /* Scratch space for extra data relating to the code object.
        Type is a void* to keep the format private in codeobject.c to force
        people to go through the proper APIs. */
