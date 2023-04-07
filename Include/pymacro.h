@@ -108,6 +108,8 @@
 /* Check if pointer "p" is aligned to "a"-bytes boundary. */
 #define _Py_IS_ALIGNED(p, a) (!((uintptr_t)(p) & (uintptr_t)((a) - 1)))
 
+#define _Py_CONTAINER_OF(ptr, type, name) ((type *)((char *)(ptr) - offsetof(type, name)))
+
 /* Use this for unused arguments in a function definition to silence compiler
  * warnings. Example:
  *

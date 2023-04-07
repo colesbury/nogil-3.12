@@ -149,7 +149,7 @@ lltrace_instruction(_PyInterpreterFrame *frame,
     int opcode = _Py_OPCODE(*next_instr);
     const char *opname = _PyOpcode_OpName[opcode];
     assert(opname != NULL);
-    int offset = (int)(next_instr - _PyCode_CODE(frame->f_code));
+    int offset = (int)(next_instr - frame->first_instr);
     if (HAS_ARG((int)_PyOpcode_Deopt[opcode])) {
         printf("%d: %s %d\n", offset * 2, opname, oparg);
     }
@@ -769,13 +769,13 @@ GETITEM(PyObject *v, Py_ssize_t i) {
 /* Code access macros */
 
 /* The integer overflow is checked by an assertion below. */
-#define INSTR_OFFSET() ((int)(next_instr - _PyCode_CODE(frame->f_code)))
+#define INSTR_OFFSET() ((int)(next_instr - frame->first_instr))
 #define NEXTOPARG()  do { \
         _Py_CODEUNIT word = *next_instr; \
         opcode = _Py_OPCODE(word); \
         oparg = _Py_OPARG(word); \
     } while (0)
-#define JUMPTO(x)       (next_instr = _PyCode_CODE(frame->f_code) + (x))
+#define JUMPTO(x)       (next_instr = frame->first_instr + (x))
 #define JUMPBY(x)       (next_instr += (x))
 
 /* OpCode prediction macros
@@ -1137,8 +1137,8 @@ _PyEval_EvalFrameDefault(PyThreadState *tstate, _PyInterpreterFrame *frame, int 
     entry_frame.f_builtins = (PyObject*)0xaaa4;
 #endif
     entry_frame.f_code = tstate->interp->interpreter_trampoline;
-    entry_frame.prev_instr =
-        _PyCode_CODE(tstate->interp->interpreter_trampoline);
+    entry_frame.first_instr = _PyCode_CODE(entry_frame.f_code);
+    entry_frame.prev_instr = entry_frame.first_instr;
     entry_frame.stacktop = 0;
     entry_frame.owner = FRAME_OWNED_BY_CSTACK;
     entry_frame.yield_offset = 0;

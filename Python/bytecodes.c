@@ -795,7 +795,7 @@ dummy_func(
             if (oparg) {
                 PyObject *lasti = PEEK(oparg + 1);
                 if (PyLong_Check(lasti)) {
-                    frame->prev_instr = _PyCode_CODE(frame->f_code) + PyLong_AsLong(lasti);
+                    frame->prev_instr = frame->first_instr + PyLong_AsLong(lasti);
                     assert(!_PyErr_Occurred(tstate));
                 }
                 else {

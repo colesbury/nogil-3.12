@@ -61,6 +61,7 @@ typedef struct _PyInterpreterFrame {
     // example, it may be an inline CACHE entry, an instruction we just jumped
     // over, or (in the case of a newly-created frame) a totally invalid value:
     _Py_CODEUNIT *prev_instr;
+    _Py_CODEUNIT *first_instr;
     int stacktop;  /* Offset of TOS from localsplus  */
     uint16_t yield_offset;
     char owner;
@@ -69,7 +70,7 @@ typedef struct _PyInterpreterFrame {
 } _PyInterpreterFrame;
 
 #define _PyInterpreterFrame_LASTI(IF) \
-    ((int)((IF)->prev_instr - _PyCode_CODE((IF)->f_code)))
+    ((int)((IF)->prev_instr - (IF)->first_instr))
 
 static inline PyObject **_PyFrame_Stackbase(_PyInterpreterFrame *f) {
     return f->localsplus + f->f_code->co_nlocalsplus;
@@ -121,7 +122,8 @@ _PyFrame_Initialize(
     frame->f_locals = locals;
     frame->stacktop = code->co_nlocalsplus;
     frame->frame_obj = NULL;
-    frame->prev_instr = _PyCode_CODE(code) - 1;
+    frame->first_instr = _PyCode_CODE(code);
+    frame->prev_instr = frame->first_instr - 1;
     frame->yield_offset = 0;
     frame->owner = FRAME_OWNED_BY_THREAD;
 
@@ -163,7 +165,7 @@ static inline bool
 _PyFrame_IsIncomplete(_PyInterpreterFrame *frame)
 {
     return frame->owner != FRAME_OWNED_BY_GENERATOR &&
-    frame->prev_instr < _PyCode_CODE(frame->f_code) + frame->f_code->_co_firsttraceable;
+    frame->prev_instr < frame->first_instr + frame->f_code->_co_firsttraceable;
 }
 
 static inline _PyInterpreterFrame *
@@ -262,6 +264,12 @@ PyGenObject *_PyFrame_GetGenerator(_PyInterpreterFrame *frame)
     assert(frame->owner == FRAME_OWNED_BY_GENERATOR);
     size_t offset_in_gen = offsetof(PyGenObject, gi_iframe);
     return (PyGenObject *)(((char *)frame) - offset_in_gen);
+}
+
+static inline _PyCodeArray *
+_PyFrame_GetCodeArray(_PyInterpreterFrame *frame)
+{
+    return _Py_CONTAINER_OF(frame->first_instr, _PyCodeArray, code);
 }
 
 #ifdef __cplusplus

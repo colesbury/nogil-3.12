@@ -812,7 +812,7 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno, void *Py_UNUSED(ignore
     }
     /* Finally set the new lasti and return OK. */
     f->f_lineno = 0;
-    f->f_frame->prev_instr = _PyCode_CODE(f->f_frame->f_code) + best_addr;
+    f->f_frame->prev_instr = f->f_frame->first_instr + best_addr;
     return 0;
 }
 
@@ -1066,7 +1066,8 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code,
     f->f_frame = (_PyInterpreterFrame *)f->_f_frame_data;
     f->f_frame->owner = FRAME_OWNED_BY_FRAME_OBJECT;
     // This frame needs to be "complete", so pretend that the first RESUME ran:
-    f->f_frame->prev_instr = _PyCode_CODE(code) + code->_co_firsttraceable;
+    assert(f->f_frame->f_code == code);
+    f->f_frame->prev_instr = f->f_frame->first_instr + code->_co_firsttraceable;
     assert(!_PyFrame_IsIncomplete(f->f_frame));
     Py_DECREF(func);
     _PyObject_GC_TRACK(f);
@@ -1079,7 +1080,7 @@ _PyFrame_OpAlreadyRan(_PyInterpreterFrame *frame, int opcode, int oparg)
     // This only works when opcode is a non-quickened form:
     assert(_PyOpcode_Deopt[opcode] == opcode);
     int check_oparg = 0;
-    for (_Py_CODEUNIT *instruction = _PyCode_CODE(frame->f_code);
+    for (_Py_CODEUNIT *instruction = frame->first_instr;
          instruction < frame->prev_instr; instruction++)
     {
         int check_opcode = _PyOpcode_Deopt[_Py_OPCODE(*instruction)];
@@ -1107,7 +1108,7 @@ frame_init_get_vars(_PyInterpreterFrame *frame)
     // here:
     PyCodeObject *co = frame->f_code;
     int lasti = _PyInterpreterFrame_LASTI(frame);
-    if (!(lasti < 0 && _Py_OPCODE(_PyCode_CODE(co)[0]) == COPY_FREE_VARS
+    if (!(lasti < 0 && _Py_OPCODE(frame->first_instr[0]) == COPY_FREE_VARS
           && PyFunction_Check(frame->f_funcobj)))
     {
         /* Free vars are initialized */
@@ -1122,7 +1123,8 @@ frame_init_get_vars(_PyInterpreterFrame *frame)
         frame->localsplus[offset + i] = Py_NewRef(o);
     }
     // COPY_FREE_VARS doesn't have inline CACHEs, either:
-    frame->prev_instr = _PyCode_CODE(frame->f_code);
+    frame->first_instr = _PyCode_CODE(frame->f_code);
+    frame->prev_instr = frame->first_instr;
 }
 
 
