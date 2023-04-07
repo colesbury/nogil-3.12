@@ -623,7 +623,7 @@ static int
 specialize_dict_access(
     PyObject *owner, _Py_CODEUNIT *instr, PyTypeObject *type,
     DescriptorClassification kind, PyObject *name,
-    int base_op, int values_op, int hint_op)
+    int base_op, int hint_op)
 {
     assert(kind == NON_OVERRIDING || kind == NON_DESCRIPTOR || kind == ABSENT ||
         kind == BUILTIN_CLASSMETHOD || kind == PYTHON_CLASSMETHOD);
@@ -658,7 +658,7 @@ specialize_dict_access(
     }
     write_u32(cache->version, type->tp_version_tag);
     cache->index = (uint16_t)index;
-    _py_set_opcode(instr, values_op);
+    _py_set_opcode(instr, hint_op);
     return 1;
 }
 
@@ -824,7 +824,7 @@ _Py_Specialize_LoadAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
             goto fail;
         case ABSENT:
             if (specialize_dict_access(owner, instr, type, kind, name, LOAD_ATTR,
-                                    LOAD_ATTR_WITH_HINT, LOAD_ATTR_WITH_HINT))
+                                    LOAD_ATTR_WITH_HINT))
             {
                 goto success;
             }
@@ -922,7 +922,7 @@ _Py_Specialize_StoreAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
             goto fail;
         case ABSENT:
             if (specialize_dict_access(owner, instr, type, kind, name, STORE_ATTR,
-                                    STORE_ATTR_INSTANCE_VALUE, STORE_ATTR_WITH_HINT))
+                                       STORE_ATTR_WITH_HINT))
             {
                 goto success;
             }
