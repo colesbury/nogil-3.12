@@ -1,6 +1,7 @@
 #include "Python.h"
 #include "pycore_code.h"
 #include "pycore_dict.h"
+#include "pycore_frame.h"         // _PyInterpreterFrame
 #include "pycore_function.h"      // _PyFunction_GetVersionForCurrentState()
 #include "pycore_global_strings.h"  // _Py_ID()
 #include "pycore_long.h"
@@ -267,13 +268,16 @@ void
 _PyCode_Quicken(PyCodeObject *code)
 {
     int previous_opcode = 0;
+    int has_load_attr = 0;
     _Py_CODEUNIT *instructions = _PyCode_CODE(code);
     for (int i = 0; i < Py_SIZE(code); i++) {
         int opcode = _PyOpcode_Deopt[_Py_OPCODE(instructions[i])];
         int caches = _PyOpcode_Caches[opcode];
         if (opcode == LOAD_ATTR) {
             instructions[i].opcode = LOAD_ATTR_PROFILE;
+            memset(&instructions[i + 1], 0, caches * sizeof(_Py_CODEUNIT));
             previous_opcode = 0;
+            has_load_attr = 1;
             i += caches;
             continue;
         }
@@ -301,6 +305,9 @@ _PyCode_Quicken(PyCodeObject *code)
                 break;
         }
         previous_opcode = opcode;
+    }
+    if (has_load_attr) {
+        code->co_counter = 3;
     }
 }
 
@@ -640,16 +647,18 @@ specialize_dict_access(
     }
     _PyAttrCache *cache = (_PyAttrCache *)(instr + 1);
     PyDictKeysObject *keys = ((PyHeapTypeObject *)type)->ht_cached_keys;
-    PyDictOrValues dorv = *_PyObject_DictOrValuesPointer(owner);
-    if (!_PyDictOrValues_IsValues(dorv)) {
-        PyDictObject *dict = (PyDictObject *)_PyDictOrValues_GetDict(dorv);
-        if (dict == NULL || !PyDict_CheckExact(dict)) {
-            SPECIALIZATION_FAIL(base_op, SPEC_FAIL_NO_DICT);
-            return 0;
-        }
-        if (dict->ma_keys != keys) {
-            SPECIALIZATION_FAIL(base_op, SPEC_FAIL_ATTR_NOT_MANAGED_DICT);
-            return 0;
+    if (owner != NULL) {
+        PyDictOrValues dorv = *_PyObject_DictOrValuesPointer(owner);
+        if (!_PyDictOrValues_IsValues(dorv)) {
+            PyDictObject *dict = (PyDictObject *)_PyDictOrValues_GetDict(dorv);
+            if (dict == NULL || !PyDict_CheckExact(dict)) {
+                SPECIALIZATION_FAIL(base_op, SPEC_FAIL_NO_DICT);
+                return 0;
+            }
+            if (dict->ma_keys != keys) {
+                SPECIALIZATION_FAIL(base_op, SPEC_FAIL_ATTR_NOT_MANAGED_DICT);
+                return 0;
+            }
         }
     }
     assert(PyUnicode_CheckExact(name));
@@ -668,19 +677,70 @@ specialize_dict_access(
     return 1;
 }
 
-static int specialize_attr_loadmethod(PyObject* owner, _Py_CODEUNIT* instr, PyObject* name,
+static int specialize_attr_loadmethod(PyTypeObject *owner_cls, _Py_CODEUNIT* instr, PyObject* name,
     PyObject* descr, DescriptorClassification kind);
 static int specialize_class_load_attr(PyObject* owner, _Py_CODEUNIT* instr, PyObject* name);
 
+int
+_Py_Specialize_Function(_PyInterpreterFrame *frame, PyCodeObject *co,
+                        _Py_CODEUNIT *instr)
+{
+    _PyCodeArray *old_arr = _PyCode_CODE_ARRAY(co);
+    // Py_ssize_t nbytes = sizeof(_PyCodeArray) + sizeof(_Py_CODEUNIT) * old_arr->size;
+    // _PyCodeArray *arr = PyMem_Malloc(nbytes);
+    // if (arr == NULL) {
+    //     PyErr_NoMemory();
+    //     return -1;
+    // }
+    // memcpy(arr, old_arr, nbytes);
+    // arr->is_static = 0;
+
+    Py_ssize_t size = (Py_ssize_t)old_arr->size;
+    _Py_CODEUNIT *code = (_Py_CODEUNIT *)old_arr->code;
+    assert(((uintptr_t)code % sizeof(void*)) == 0);
+    int oparg = 0;
+    for (Py_ssize_t i = 0; i < size; i++) {
+        _Py_CODEUNIT *instr = &code[i];
+        int opcode = instr->opcode;
+        oparg = (oparg << 8) | instr->oparg;
+        if (opcode == EXTENDED_ARG) {
+            continue;
+        }
+        if (opcode == LOAD_ATTR_PROFILE) {
+            _PyAttrProfileCache *cache = _Py_ALIGN_UP(&code[i + 1], sizeof(void*));
+            uintptr_t val = _Py_atomic_load_uintptr(&cache->profiled);
+            if (val == 1) {
+                code[i].opcode = LOAD_ATTR;
+                goto next;
+            }
+            else if (val == 0) {
+                code[i].opcode = LOAD_ATTR;
+                goto next;
+            }
+
+            int is_owner = (val & 1);
+            PyObject *obj = (PyObject *)(val & ~1);
+            PyObject *name = PyTuple_GET_ITEM(co->co_names, oparg >> 1);
+            PyObject *owner = is_owner ? obj : NULL;
+            PyTypeObject *type = is_owner ? Py_TYPE(obj) : (PyTypeObject *)obj;
+
+            _Py_Specialize_LoadAttr(owner, type, instr, name);
+        }
+next:
+        i += _PyOpcode_Caches[_PyOpcode_Deopt[opcode]];
+        oparg = 0;
+    }
+    return 0;
+}
+
 void
-_Py_Specialize_LoadAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
+_Py_Specialize_LoadAttr(PyObject *owner, PyTypeObject *type, _Py_CODEUNIT *instr, PyObject *name)
 {
 #if _Py_NO_SPECIALIZATIONS
     return;
 #endif
     assert(_PyOpcode_Caches[LOAD_ATTR] == INLINE_CACHE_ENTRIES_LOAD_ATTR);
     _PyAttrCache *cache = (_PyAttrCache *)(instr + 1);
-    PyTypeObject *type = Py_TYPE(owner);
     if (!_PyType_IsReady(type)) {
         // We *might* not really need this check, but we inherited it from
         // PyObject_GenericGetAttr and friends... and this way we still do the
@@ -688,14 +748,14 @@ _Py_Specialize_LoadAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
         SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_OTHER);
         goto fail;
     }
-    if (PyModule_CheckExact(owner)) {
+    if (owner != NULL && PyModule_CheckExact(owner)) {
         if (specialize_module_load_attr(owner, instr, name))
         {
             goto fail;
         }
         goto success;
     }
-    if (PyType_Check(owner)) {
+    if (owner != NULL && PyType_Check(owner)) {
         if (specialize_class_load_attr(owner, instr, name)) {
             goto fail;
         }
@@ -712,7 +772,7 @@ _Py_Specialize_LoadAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
         {
             int oparg = _Py_OPARG(*instr);
             if (oparg & 1) {
-                if (specialize_attr_loadmethod(owner, instr, name, descr, kind)) {
+                if (specialize_attr_loadmethod(type, instr, name, descr, kind)) {
                     goto success;
                 }
             }
@@ -754,7 +814,7 @@ _Py_Specialize_LoadAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
             PyMemberDescrObject *member = (PyMemberDescrObject *)descr;
             struct PyMemberDef *dmem = member->d_member;
             Py_ssize_t offset = dmem->offset;
-            if (!PyObject_TypeCheck(owner, member->d_common.d_type)) {
+            if (type != member->d_common.d_type && !PyType_IsSubtype(type, member->d_common.d_type)) {
                 SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_EXPECTED_ERROR);
                 goto fail;
             }
@@ -844,6 +904,8 @@ fail:
 success:
     STAT_INC(LOAD_ATTR, success);
     assert(!PyErr_Occurred());
+    assert(instr->opcode != LOAD_ATTR_PROFILE);
+    assert(instr->opcode != LOAD_ATTR);
     cache->counter = adaptive_counter_cooldown();
 }
 
@@ -1025,24 +1087,25 @@ typedef enum {
 // can cause a significant drop in cache hits. A possible test is
 // python.exe -m test_typing test_re test_dis test_zlib.
 static int
-specialize_attr_loadmethod(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name,
+specialize_attr_loadmethod(PyTypeObject *owner_cls, _Py_CODEUNIT *instr, PyObject *name,
 PyObject *descr, DescriptorClassification kind)
 {
     _PyLoadMethodCache *cache = (_PyLoadMethodCache *)(instr + 1);
-    PyTypeObject *owner_cls = Py_TYPE(owner);
 
     assert(kind == METHOD && descr != NULL);
     ObjectDictKind dictkind;
     PyDictKeysObject *keys;
     if (owner_cls->tp_flags & Py_TPFLAGS_MANAGED_DICT) {
-        PyDictOrValues dorv = *_PyObject_DictOrValuesPointer(owner);
+        // TODO(sgross): profile dictkind
         keys = ((PyHeapTypeObject *)owner_cls)->ht_cached_keys;
-        if (_PyDictOrValues_IsValues(dorv)) {
-            dictkind = MANAGED_VALUES;
-        }
-        else {
-            dictkind = MANAGED_DICT;
-        }
+        dictkind = MANAGED_VALUES;
+        // PyDictOrValues dorv = *_PyObject_DictOrValuesPointer(owner);
+        // if (_PyDictOrValues_IsValues(dorv)) {
+        //     dictkind = MANAGED_VALUES;
+        // }
+        // else {
+        //     dictkind = MANAGED_DICT;
+        // }
     }
     else {
         Py_ssize_t dictoffset = owner_cls->tp_dictoffset;
@@ -1055,7 +1118,8 @@ PyObject *descr, DescriptorClassification kind)
             keys = NULL;
         }
         else {
-            PyObject *dict = *(PyObject **) ((char *)owner + dictoffset);
+            // TODO(sgross): profile dict
+            PyObject *dict = NULL;//*(PyObject **) ((char *)owner + dictoffset);
             if (dict == NULL) {
                 // This object will have a dict if user access __dict__
                 dictkind = LAZY_DICT;

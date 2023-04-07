@@ -8,10 +8,13 @@ extern "C" {
 
 typedef struct _PyCodeArray {
     int is_static : 1;
-    uint32_t size;
+    uint32_t size;      // size in _Py_CODEUNIT
     // TODO: tree node
     char code[];
 } _PyCodeArray;
+
+#define _PyCode_CODE_ARRAY(CO) ((_PyCodeArray *)((char *)(CO)->co_code_adaptive - offsetof(_PyCodeArray, code)))
+
 
 /* PEP 659
  * Specialization and quickening structs and helper functions
@@ -231,7 +234,9 @@ extern int _PyLineTable_PreviousAddressRange(PyCodeAddressRange *range);
 
 /* Specialization functions */
 
-extern void _Py_Specialize_LoadAttr(PyObject *owner, _Py_CODEUNIT *instr,
+extern int _Py_Specialize_Function(struct _PyInterpreterFrame *frame, PyCodeObject *code,
+                                   _Py_CODEUNIT *instr);
+extern void _Py_Specialize_LoadAttr(PyObject *owner, PyTypeObject *type, _Py_CODEUNIT *instr,
                                     PyObject *name);
 extern void _Py_Specialize_StoreAttr(PyObject *owner, _Py_CODEUNIT *instr,
                                      PyObject *name);

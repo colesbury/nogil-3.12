@@ -24,6 +24,7 @@
 */
 
 #include "Python.h"
+#include "opcode.h"
 #include "pycore_context.h"
 #include "pycore_dict.h"
 #include "pycore_initconfig.h"
@@ -1414,7 +1415,9 @@ code_clear_dead_profile_types(PyCodeObject *co)
             continue;
         }
         idx += table[i];
-
+        if (instr[idx].opcode != LOAD_ATTR_PROFILE) {
+            continue;
+        }
         uintptr_t *ptr = _Py_ALIGN_UP(&instr[idx + 1], sizeof(void *));
         PyObject *obj = (PyObject *)(*ptr & ~1);
         if (obj == NULL) {

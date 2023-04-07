@@ -12,6 +12,19 @@
             if (oparg < 2) {
                 CHECK_EVAL_BREAKER();
             }
+            if (oparg == 0) {
+                PyCodeObject *code = frame->f_code;
+                uint32_t counter = _Py_atomic_load_uint32_relaxed(&code->co_counter);
+                if (counter > 0) {
+                    counter--;
+                    _Py_atomic_store_uint32_relaxed(&code->co_counter, counter);
+                    if (counter == 0) {
+                        if (_Py_Specialize_Function(frame, code, next_instr) < 0) {
+                            PyErr_WriteUnraisable(NULL);
+                        }
+                    }
+                }
+            }
             DISPATCH();
         }
 
