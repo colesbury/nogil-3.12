@@ -1779,31 +1779,6 @@
             DISPATCH();
         }
 
-        TARGET(LOAD_ATTR_INSTANCE_VALUE) {
-            assert(cframe.use_tracing == 0);
-            PyObject *owner = TOP();
-            PyObject *res;
-            PyTypeObject *tp = Py_TYPE(owner);
-            _PyAttrCache *cache = (_PyAttrCache *)next_instr;
-            uint32_t type_version = read_u32(cache->version);
-            assert(type_version != 0);
-            DEOPT_IF(tp->tp_version_tag != type_version, LOAD_ATTR);
-            assert(tp->tp_dictoffset < 0);
-            assert(tp->tp_flags & Py_TPFLAGS_MANAGED_DICT);
-            PyDictOrValues dorv = *_PyObject_DictOrValuesPointer(owner);
-            DEOPT_IF(!_PyDictOrValues_IsValues(dorv), LOAD_ATTR);
-            PyDictValues *dv = _PyDictOrValues_GetValues(dorv);
-            res = _Py_TryXFetchRef(&dv->values[cache->index]);
-            DEOPT_IF(res == NULL, LOAD_ATTR);
-            STAT_INC(LOAD_ATTR, hit);
-            SET_TOP(NULL);
-            STACK_GROW((oparg & 1));
-            SET_TOP(res);
-            Py_DECREF(owner);
-            JUMPBY(INLINE_CACHE_ENTRIES_LOAD_ATTR);
-            DISPATCH();
-        }
-
         TARGET(LOAD_ATTR_MODULE) {
             assert(cframe.use_tracing == 0);
             PyObject *owner = TOP();
@@ -1839,26 +1814,32 @@
             DEOPT_IF(tp->tp_version_tag != type_version, LOAD_ATTR);
             assert(tp->tp_flags & Py_TPFLAGS_MANAGED_DICT);
             PyDictOrValues dorv = *_PyObject_DictOrValuesPointer(owner);
-            DEOPT_IF(_PyDictOrValues_IsValues(dorv), LOAD_ATTR);
-            PyDictObject *dict = (PyDictObject *)_PyDictOrValues_GetDict(dorv);
-            DEOPT_IF(dict == NULL, LOAD_ATTR);
-            assert(PyDict_CheckExact((PyObject *)dict));
-            PyObject *name = GETITEM(names, oparg>>1);
-            uint16_t hint = cache->index;
-            DEOPT_IF(hint >= (size_t)dict->ma_keys->dk_nentries, LOAD_ATTR);
-            if (DK_IS_UNICODE(dict->ma_keys)) {
-                PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(dict->ma_keys) + hint;
-                DEOPT_IF(ep->me_key != name, LOAD_ATTR);
-                res = ep->me_value;
+            if (_PyDictOrValues_IsValues(dorv)) {
+                PyDictValues *dv = _PyDictOrValues_GetValues(dorv);
+                res = _Py_TryXFetchRef(&dv->values[cache->index]);
+                DEOPT_IF(res == NULL, LOAD_ATTR);
             }
             else {
-                PyDictKeyEntry *ep = DK_ENTRIES(dict->ma_keys) + hint;
-                DEOPT_IF(ep->me_key != name, LOAD_ATTR);
-                res = ep->me_value;
+                PyDictObject *dict = (PyDictObject *)_PyDictOrValues_GetDict(dorv);
+                DEOPT_IF(dict == NULL, LOAD_ATTR);
+                assert(PyDict_CheckExact((PyObject *)dict));
+                PyObject *name = GETITEM(names, oparg>>1);
+                uint16_t hint = cache->index;
+                DEOPT_IF(hint >= (size_t)dict->ma_keys->dk_nentries, LOAD_ATTR);
+                if (DK_IS_UNICODE(dict->ma_keys)) {
+                    PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(dict->ma_keys) + hint;
+                    DEOPT_IF(ep->me_key != name, LOAD_ATTR);
+                    res = ep->me_value;
+                }
+                else {
+                    PyDictKeyEntry *ep = DK_ENTRIES(dict->ma_keys) + hint;
+                    DEOPT_IF(ep->me_key != name, LOAD_ATTR);
+                    res = ep->me_value;
+                }
+                DEOPT_IF(res == NULL, LOAD_ATTR);
+                Py_INCREF(res);
             }
-            DEOPT_IF(res == NULL, LOAD_ATTR);
             STAT_INC(LOAD_ATTR, hit);
-            Py_INCREF(res);
             SET_TOP(NULL);
             STACK_GROW((oparg & 1));
             SET_TOP(res);
@@ -1974,33 +1955,6 @@
             DISPATCH_INLINED(new_frame);
         }
 
-        TARGET(STORE_ATTR_INSTANCE_VALUE) {
-            PyObject *owner = PEEK(1);
-            PyObject *value = PEEK(2);
-            uint32_t type_version = read_u32(&next_instr[1].cache);
-            uint16_t index = read_u16(&next_instr[3].cache);
-            assert(cframe.use_tracing == 0);
-            PyTypeObject *tp = Py_TYPE(owner);
-            assert(type_version != 0);
-            DEOPT_IF(tp->tp_version_tag != type_version, STORE_ATTR);
-            assert(tp->tp_flags & Py_TPFLAGS_MANAGED_DICT);
-            PyDictOrValues *dorv_ptr = _PyObject_DictOrValuesPointer(owner);
-            PyDictValues *values = _PyDictValues_Lock(dorv_ptr);
-            DEOPT_IF(values == NULL, STORE_ATTR);
-            STAT_INC(STORE_ATTR, hit);
-            PyObject *old_value = values->values[index];
-            _Py_atomic_store_ptr_release(&values->values[index], value);
-            if (old_value == NULL) {
-                _PyDictValues_AddToInsertionOrder(values, index);
-            }
-            _PyDictValues_Unlock(dorv_ptr);
-            Py_XDECREF(old_value);
-            Py_DECREF(owner);
-            STACK_SHRINK(2);
-            JUMPBY(4);
-            DISPATCH();
-        }
-
         TARGET(STORE_ATTR_WITH_HINT) {
             PyObject *owner = PEEK(1);
             PyObject *value = PEEK(2);
@@ -2011,40 +1965,53 @@
             assert(type_version != 0);
             DEOPT_IF(tp->tp_version_tag != type_version, STORE_ATTR);
             assert(tp->tp_flags & Py_TPFLAGS_MANAGED_DICT);
-            PyDictOrValues dorv = *_PyObject_DictOrValuesPointer(owner);
-            DEOPT_IF(_PyDictOrValues_IsValues(dorv), STORE_ATTR);
-            PyDictObject *dict = (PyDictObject *)_PyDictOrValues_GetDict(dorv);
-            DEOPT_IF(dict == NULL, STORE_ATTR);
-            assert(PyDict_CheckExact((PyObject *)dict));
-            PyObject *name = GETITEM(names, oparg);
-            DEOPT_IF(hint >= (size_t)dict->ma_keys->dk_nentries, STORE_ATTR);
-            PyObject *old_value;
-            uint64_t new_version;
-            if (DK_IS_UNICODE(dict->ma_keys)) {
-                PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(dict->ma_keys) + hint;
-                DEOPT_IF(ep->me_key != name, STORE_ATTR);
-                old_value = ep->me_value;
-                DEOPT_IF(old_value == NULL, STORE_ATTR);
-                new_version = _PyDict_NotifyEvent(PyDict_EVENT_MODIFIED, dict, name, value);
-                ep->me_value = value;
+            PyDictOrValues *dorv_ptr = _PyObject_DictOrValuesPointer(owner);
+            PyDictValues *values = _PyDictValues_Lock(dorv_ptr);
+            if (values != NULL) {
+                STAT_INC(STORE_ATTR, hit);
+                PyObject *old_value = values->values[hint];
+                _Py_atomic_store_ptr_release(&values->values[hint], value);
+                if (old_value == NULL) {
+                    _PyDictValues_AddToInsertionOrder(values, hint);
+                }
+                _PyDictValues_Unlock(dorv_ptr);
+                Py_XDECREF(old_value);
+                Py_DECREF(owner);
             }
             else {
-                PyDictKeyEntry *ep = DK_ENTRIES(dict->ma_keys) + hint;
-                DEOPT_IF(ep->me_key != name, STORE_ATTR);
-                old_value = ep->me_value;
-                DEOPT_IF(old_value == NULL, STORE_ATTR);
-                new_version = _PyDict_NotifyEvent(PyDict_EVENT_MODIFIED, dict, name, value);
-                ep->me_value = value;
+                PyDictObject *dict = (PyDictObject *)_PyDictOrValues_GetDict(*dorv_ptr);
+                DEOPT_IF(dict == NULL, STORE_ATTR);
+                assert(PyDict_CheckExact((PyObject *)dict));
+                PyObject *name = GETITEM(names, oparg);
+                DEOPT_IF(hint >= (size_t)dict->ma_keys->dk_nentries, STORE_ATTR);
+                PyObject *old_value;
+                uint64_t new_version;
+                if (DK_IS_UNICODE(dict->ma_keys)) {
+                    PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(dict->ma_keys) + hint;
+                    DEOPT_IF(ep->me_key != name, STORE_ATTR);
+                    old_value = ep->me_value;
+                    DEOPT_IF(old_value == NULL, STORE_ATTR);
+                    new_version = _PyDict_NotifyEvent(PyDict_EVENT_MODIFIED, dict, name, value);
+                    ep->me_value = value;
+                }
+                else {
+                    PyDictKeyEntry *ep = DK_ENTRIES(dict->ma_keys) + hint;
+                    DEOPT_IF(ep->me_key != name, STORE_ATTR);
+                    old_value = ep->me_value;
+                    DEOPT_IF(old_value == NULL, STORE_ATTR);
+                    new_version = _PyDict_NotifyEvent(PyDict_EVENT_MODIFIED, dict, name, value);
+                    ep->me_value = value;
+                }
+                Py_DECREF(old_value);
+                STAT_INC(STORE_ATTR, hit);
+                /* Ensure dict is GC tracked if it needs to be */
+                if (!_PyObject_GC_IS_TRACKED(dict) && _PyObject_GC_MAY_BE_TRACKED(value)) {
+                    _PyObject_GC_TRACK(dict);
+                }
+                /* PEP 509 */
+                dict->ma_version_tag = new_version;
+                Py_DECREF(owner);
             }
-            Py_DECREF(old_value);
-            STAT_INC(STORE_ATTR, hit);
-            /* Ensure dict is GC tracked if it needs to be */
-            if (!_PyObject_GC_IS_TRACKED(dict) && _PyObject_GC_MAY_BE_TRACKED(value)) {
-                _PyObject_GC_TRACK(dict);
-            }
-            /* PEP 509 */
-            dict->ma_version_tag = new_version;
-            Py_DECREF(owner);
             STACK_SHRINK(2);
             JUMPBY(4);
             DISPATCH();
