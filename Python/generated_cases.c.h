@@ -1839,26 +1839,32 @@
             DEOPT_IF(tp->tp_version_tag != type_version, LOAD_ATTR);
             assert(tp->tp_flags & Py_TPFLAGS_MANAGED_DICT);
             PyDictOrValues dorv = *_PyObject_DictOrValuesPointer(owner);
-            DEOPT_IF(_PyDictOrValues_IsValues(dorv), LOAD_ATTR);
-            PyDictObject *dict = (PyDictObject *)_PyDictOrValues_GetDict(dorv);
-            DEOPT_IF(dict == NULL, LOAD_ATTR);
-            assert(PyDict_CheckExact((PyObject *)dict));
-            PyObject *name = GETITEM(names, oparg>>1);
-            uint16_t hint = cache->index;
-            DEOPT_IF(hint >= (size_t)dict->ma_keys->dk_nentries, LOAD_ATTR);
-            if (DK_IS_UNICODE(dict->ma_keys)) {
-                PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(dict->ma_keys) + hint;
-                DEOPT_IF(ep->me_key != name, LOAD_ATTR);
-                res = ep->me_value;
+            if (_PyDictOrValues_IsValues(dorv)) {
+                PyDictValues *dv = _PyDictOrValues_GetValues(dorv);
+                res = _Py_TryXFetchRef(&dv->values[cache->index]);
+                DEOPT_IF(res == NULL, LOAD_ATTR);
             }
             else {
-                PyDictKeyEntry *ep = DK_ENTRIES(dict->ma_keys) + hint;
-                DEOPT_IF(ep->me_key != name, LOAD_ATTR);
-                res = ep->me_value;
+                PyDictObject *dict = (PyDictObject *)_PyDictOrValues_GetDict(dorv);
+                DEOPT_IF(dict == NULL, LOAD_ATTR);
+                assert(PyDict_CheckExact((PyObject *)dict));
+                PyObject *name = GETITEM(names, oparg>>1);
+                uint16_t hint = cache->index;
+                DEOPT_IF(hint >= (size_t)dict->ma_keys->dk_nentries, LOAD_ATTR);
+                if (DK_IS_UNICODE(dict->ma_keys)) {
+                    PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(dict->ma_keys) + hint;
+                    DEOPT_IF(ep->me_key != name, LOAD_ATTR);
+                    res = ep->me_value;
+                }
+                else {
+                    PyDictKeyEntry *ep = DK_ENTRIES(dict->ma_keys) + hint;
+                    DEOPT_IF(ep->me_key != name, LOAD_ATTR);
+                    res = ep->me_value;
+                }
+                DEOPT_IF(res == NULL, LOAD_ATTR);
+                Py_INCREF(res);
             }
-            DEOPT_IF(res == NULL, LOAD_ATTR);
             STAT_INC(LOAD_ATTR, hit);
-            Py_INCREF(res);
             SET_TOP(NULL);
             STACK_GROW((oparg & 1));
             SET_TOP(res);

@@ -633,44 +633,32 @@ specialize_dict_access(
         return 0;
     }
     _PyAttrCache *cache = (_PyAttrCache *)(instr + 1);
+    PyDictKeysObject *keys = ((PyHeapTypeObject *)type)->ht_cached_keys;
     PyDictOrValues dorv = *_PyObject_DictOrValuesPointer(owner);
-    if (_PyDictOrValues_IsValues(dorv)) {
-        // Virtual dictionary
-        PyDictKeysObject *keys = ((PyHeapTypeObject *)type)->ht_cached_keys;
-        assert(PyUnicode_CheckExact(name));
-        Py_ssize_t index = _PyDictKeys_StringLookup(keys, name);
-        assert (index != DKIX_ERROR);
-        if (index != (uint16_t)index) {
-            SPECIALIZATION_FAIL(base_op,
-                                index == DKIX_EMPTY ?
-                                SPEC_FAIL_ATTR_NOT_IN_KEYS :
-                                SPEC_FAIL_OUT_OF_RANGE);
-            return 0;
-        }
-        write_u32(cache->version, type->tp_version_tag);
-        cache->index = (uint16_t)index;
-        _py_set_opcode(instr, values_op);
-    }
-    else {
+    if (!_PyDictOrValues_IsValues(dorv)) {
         PyDictObject *dict = (PyDictObject *)_PyDictOrValues_GetDict(dorv);
         if (dict == NULL || !PyDict_CheckExact(dict)) {
             SPECIALIZATION_FAIL(base_op, SPEC_FAIL_NO_DICT);
             return 0;
         }
-        // We found an instance with a __dict__.
-        Py_ssize_t index =
-            _PyDict_LookupIndex(dict, name);
-        if (index != (uint16_t)index) {
-            SPECIALIZATION_FAIL(base_op,
-                                index == DKIX_EMPTY ?
-                                SPEC_FAIL_ATTR_NOT_IN_DICT :
-                                SPEC_FAIL_OUT_OF_RANGE);
+        if (dict->ma_keys != keys) {
+            SPECIALIZATION_FAIL(base_op, SPEC_FAIL_ATTR_NOT_MANAGED_DICT);
             return 0;
         }
-        cache->index = (uint16_t)index;
-        write_u32(cache->version, type->tp_version_tag);
-        _py_set_opcode(instr, hint_op);
     }
+    assert(PyUnicode_CheckExact(name));
+    Py_ssize_t index = _PyDictKeys_StringLookup(keys, name);
+    assert (index != DKIX_ERROR);
+    if (index != (uint16_t)index) {
+        SPECIALIZATION_FAIL(base_op,
+                            index == DKIX_EMPTY ?
+                            SPEC_FAIL_ATTR_NOT_IN_KEYS :
+                            SPEC_FAIL_OUT_OF_RANGE);
+        return 0;
+    }
+    write_u32(cache->version, type->tp_version_tag);
+    cache->index = (uint16_t)index;
+    _py_set_opcode(instr, values_op);
     return 1;
 }
 
@@ -836,7 +824,7 @@ _Py_Specialize_LoadAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
             goto fail;
         case ABSENT:
             if (specialize_dict_access(owner, instr, type, kind, name, LOAD_ATTR,
-                                    LOAD_ATTR_INSTANCE_VALUE, LOAD_ATTR_WITH_HINT))
+                                    LOAD_ATTR_WITH_HINT, LOAD_ATTR_WITH_HINT))
             {
                 goto success;
             }
