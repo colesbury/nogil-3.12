@@ -204,6 +204,7 @@ gen_send_ex2(PyGenObject *gen, PyObject *arg, PyObject **presult,
     /* Push arg onto the frame's value stack */
     result = arg ? arg : Py_None;
     _PyFrame_StackPush(frame, Py_NewRef(result));
+    _PyFrame_UpdateCode(frame);
 
     _PyErr_StackItem *prev_exc_info = tstate->exc_info;
     gen->gi_exc_state.previous_item = prev_exc_info;

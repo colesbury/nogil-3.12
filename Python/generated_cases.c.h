@@ -22,6 +22,7 @@
                         if (_Py_Specialize_Function(frame, code, next_instr) < 0) {
                             PyErr_WriteUnraisable(NULL);
                         }
+                        next_instr += _PyFrame_UpdateCode(frame);
                     }
                 }
             }
@@ -2671,6 +2672,7 @@
             DEOPT_IF(gen->gi_frame_state >= FRAME_EXECUTING, FOR_ITER);
             STAT_INC(FOR_ITER, hit);
             _PyInterpreterFrame *gen_frame = (_PyInterpreterFrame *)gen->gi_iframe;
+            _PyFrame_UpdateCode(gen_frame);
             frame->yield_offset = oparg;
             _PyFrame_StackPush(gen_frame, Py_None);
             gen->gi_frame_state = FRAME_EXECUTING;

@@ -188,6 +188,9 @@ typedef struct pyruntimestate {
     /* linked list of static code objects */
     struct _Py_llist_node static_code;
 
+    /* */
+    struct _Py_queue_head unlinked_code_arrays;
+
     /* The following fields are here to avoid allocation during init.
        The data is exposed through _PyRuntimeState pointer fields.
        These fields should not be accessed directly outside of init.

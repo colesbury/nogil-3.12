@@ -93,6 +93,14 @@ static inline void _PyFrame_StackPush(_PyInterpreterFrame *f, PyObject *value) {
     f->stacktop++;
 }
 
+static inline intptr_t
+_PyFrame_UpdateCode(_PyInterpreterFrame *f) {
+    intptr_t delta = _PyCode_CODE(f->f_code) - f->first_instr;
+    f->first_instr += delta;
+    f->prev_instr += delta;
+    return delta;
+}
+
 #define FRAME_SPECIALS_SIZE ((int)((sizeof(_PyInterpreterFrame)-1)/sizeof(PyObject *)))
 
 static inline int

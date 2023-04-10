@@ -298,7 +298,7 @@ class Printer:
                     self.write(f"._co_firsttraceable = {i},")
                     break
         name_as_code = f"&{name}.code"
-        self.finis.append(f"_PyStaticCode_Fini({name_as_code});")
+        self.finis.append(f"_PyStaticCode_Fini({name_as_code}, {code_array});")
         self.inits.append(f"_PyStaticCode_Init({name_as_code})")
         return f"& {name}.code.ob_base.ob_base"
 

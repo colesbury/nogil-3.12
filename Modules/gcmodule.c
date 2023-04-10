@@ -26,10 +26,12 @@
 #include "Python.h"
 #include "opcode.h"
 #include "pycore_context.h"
+#include "pycore_frame.h"       // _PyInterpreterFrame
 #include "pycore_dict.h"
 #include "pycore_initconfig.h"
 #include "pycore_interp.h"      // PyInterpreterState.gc
 #include "pycore_object.h"
+#include "pycore_opcode.h"
 #include "pycore_pyerrors.h"
 #include "pycore_pymem.h"
 #include "pycore_pystate.h"
@@ -1402,11 +1404,11 @@ clear_freelists(PyInterpreterState *interp)
 }
 
 static void
-code_clear_dead_profile_types(PyCodeObject *co)
+code_clear_dead_profile_types(PyCodeObject *co, _PyCodeArray *code_array)
 {
-    uint8_t *table = (uint8_t *)PyBytes_AsString(co->_co_profiletable);
-    Py_ssize_t size = PyBytes_Size(co->_co_profiletable);
-    _Py_CODEUNIT *instr = (_Py_CODEUNIT *)_PyCode_CODE(co);
+    uint8_t *table = (uint8_t *)PyBytes_AS_STRING(co->_co_profiletable);
+    Py_ssize_t size = PyBytes_GET_SIZE(co->_co_profiletable);
+    _Py_CODEUNIT *instr = (_Py_CODEUNIT *)code_array->code;
 
     Py_ssize_t idx = 0;
     for (Py_ssize_t i = 0; i < size; i++) {
@@ -1415,7 +1417,9 @@ code_clear_dead_profile_types(PyCodeObject *co)
             continue;
         }
         idx += table[i];
-        if (instr[idx].opcode != LOAD_ATTR_PROFILE) {
+        int opcode = instr[idx].opcode;
+        assert(_PyOpcode_Deopt[opcode] == LOAD_ATTR);
+        if (opcode != LOAD_ATTR_PROFILE) {
             continue;
         }
         uintptr_t *ptr = _Py_ALIGN_UP(&instr[idx + 1], sizeof(void *));
@@ -1437,7 +1441,7 @@ clear_dead_profile_types(struct _Py_llist_node *head, int unlink)
     while (node != head) {
         PyCodeObject *co = llist_data(node, PyCodeObject, co_gclist);
         assert(PyCode_Check(co));
-        code_clear_dead_profile_types(co);
+        code_clear_dead_profile_types(co, _PyCode_GetCodeArray(co));
 
         struct _Py_llist_node *next = node->next;
         if (unlink) {
@@ -1445,6 +1449,53 @@ clear_dead_profile_types(struct _Py_llist_node *head, int unlink)
         }
         node = next;
     }
+}
+
+static void
+mark_reachable_code_arrays(void)
+{
+    PyThreadState *t;
+    for_each_thread(t) {
+        struct _PyCFrame *cframe = t->cframe;
+        if (cframe == NULL) {
+            continue;
+        }
+        _PyInterpreterFrame *frame = cframe->current_frame;
+        while (frame != NULL) {
+            _PyCodeArray *arr = _PyFrame_GetCodeArray(frame);
+            if (arr->gc_node.next != NULL) {
+                assert(arr->co == frame->f_code);
+                assert(PyCode_Check(arr->co));
+                arr->gc_marked = 1;
+            }
+            frame = frame->previous;
+        }
+    }
+}
+
+static void
+free_dead_code_arrays(_PyRuntimeState *runtime)
+{
+    struct _Py_queue_node *prev = &_PyRuntime.unlinked_code_arrays.first;
+    struct _Py_queue_node *node = prev->next;
+    while (node != &_PyRuntime.unlinked_code_arrays.first) {
+        _PyCodeArray *arr = _Py_CONTAINER_OF(node, _PyCodeArray, gc_node);
+        if (arr->gc_marked) {
+            assert(arr->gc_marked == 1);
+            /* code array is still reachable */
+            arr->gc_marked = 0;
+            prev = node;
+            node = node->next;
+            code_clear_dead_profile_types(arr->co, arr);
+        }
+        else {
+            prev->next = node->next;
+            node = node->next;
+            memset(&arr->code, 0, arr->size * sizeof(_Py_CODEUNIT));
+            PyMem_Free(arr);
+        }
+    }
+    _PyRuntime.unlinked_code_arrays.tail = prev;
 }
 
 /* Deduce which objects among "base" are unreachable from outside the list
@@ -1699,8 +1750,10 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     gc_list_init(&wrcb_to_call);
     clear_weakrefs(&unreachable, &wrcb_to_call);
 
+    mark_reachable_code_arrays();
     clear_dead_profile_types(&_PyRuntime.static_code, /*unlink=*/0);
     clear_dead_profile_types(&args.heap_code_objects, /*unlink=*/1);
+    free_dead_code_arrays(&_PyRuntime);
 
     validate_list(&unreachable, unreachable_set);
 

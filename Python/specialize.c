@@ -8,6 +8,7 @@
 #include "pycore_moduleobject.h"
 #include "pycore_object.h"
 #include "pycore_opcode.h"        // _PyOpcode_Caches
+#include "pycore_pyqueue.h"       // _Py_queue_enqeue
 #include "structmember.h"         // struct PyMemberDef, T_OFFSET_EX
 #include "pycore_descrobject.h"
 
@@ -685,18 +686,17 @@ int
 _Py_Specialize_Function(_PyInterpreterFrame *frame, PyCodeObject *co,
                         _Py_CODEUNIT *instr)
 {
-    _PyCodeArray *old_arr = _PyCode_CODE_ARRAY(co);
-    // Py_ssize_t nbytes = sizeof(_PyCodeArray) + sizeof(_Py_CODEUNIT) * old_arr->size;
-    // _PyCodeArray *arr = PyMem_Malloc(nbytes);
-    // if (arr == NULL) {
-    //     PyErr_NoMemory();
-    //     return -1;
-    // }
-    // memcpy(arr, old_arr, nbytes);
-    // arr->is_static = 0;
+    _PyCodeArray *old_arr = _PyCode_GetCodeArray(co);
+    Py_ssize_t size = old_arr->size;
 
-    Py_ssize_t size = (Py_ssize_t)old_arr->size;
-    _Py_CODEUNIT *code = (_Py_CODEUNIT *)old_arr->code;
+    _PyCodeArray *arr = _PyCodeArray_New(size);
+    if (arr == NULL) {
+        return -1;
+    }
+    arr->co = co;
+    memcpy(arr->code, old_arr->code, size * sizeof(_Py_CODEUNIT));
+
+    _Py_CODEUNIT *code = (_Py_CODEUNIT *)arr->code;
     assert(((uintptr_t)code % sizeof(void*)) == 0);
     int oparg = 0;
     for (Py_ssize_t i = 0; i < size; i++) {
@@ -730,6 +730,16 @@ next:
         i += _PyOpcode_Caches[_PyOpcode_Deopt[opcode]];
         oparg = 0;
     }
+
+    /* Swap to the specialized code */
+    co->co_code_adaptive = arr->code;
+
+    if (!old_arr->is_static) {
+        _PyMutex_lock(&_PyRuntime.mutex);
+        _Py_queue_enqeue(&_PyRuntime.unlinked_code_arrays, &old_arr->gc_node);
+        _PyMutex_unlock(&_PyRuntime.mutex);
+    }
+
     return 0;
 }
 

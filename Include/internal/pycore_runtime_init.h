@@ -11,6 +11,7 @@ extern "C" {
 #include "pycore_object.h"
 #include "pycore_parser.h"
 #include "pycore_pymem_init.h"
+#include "pycore_pyqueue.h"
 #include "pycore_obmalloc_init.h"
 
 
@@ -90,6 +91,7 @@ extern "C" {
             }, \
         }, \
         .static_code = LLIST_INIT(runtime.static_code), \
+        .unlinked_code_arrays = _Py_QUEUE_INIT(runtime.unlinked_code_arrays), \
         ._main_interpreter = _PyInterpreterState_INIT, \
     }
 

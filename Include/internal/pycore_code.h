@@ -1,5 +1,8 @@
 #ifndef Py_INTERNAL_CODE_H
 #define Py_INTERNAL_CODE_H
+
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -7,13 +10,21 @@ extern "C" {
 #define CODE_MAX_WATCHERS 8
 
 typedef struct _PyCodeArray {
-    int is_static : 1;
+    unsigned is_static : 1;
+    uint8_t gc_marked;
     uint32_t size;      // size in _Py_CODEUNIT
-    // TODO: tree node
+    struct _Py_queue_node gc_node;
+    PyCodeObject *co;
     char code[];
 } _PyCodeArray;
 
-#define _PyCode_CODE_ARRAY(CO) ((_PyCodeArray *)((char *)(CO)->co_code_adaptive - offsetof(_PyCodeArray, code)))
+static inline _PyCodeArray *
+_PyCode_GetCodeArray(PyCodeObject *co)
+{
+    return _Py_CONTAINER_OF(co->co_code_adaptive, _PyCodeArray, code);
+}
+
+extern _PyCodeArray *_PyCodeArray_New(Py_ssize_t size);
 
 
 /* PEP 659
@@ -257,7 +268,7 @@ extern void _Py_Specialize_UnpackSequence(PyObject *seq, _Py_CODEUNIT *instr,
 extern void _Py_Specialize_ForIter(PyObject *iter, _Py_CODEUNIT *instr, int oparg);
 
 /* Finalizer function for static codeobjects used in deepfreeze.py */
-extern void _PyStaticCode_Fini(PyCodeObject *co);
+extern void _PyStaticCode_Fini(PyCodeObject *co, char *initial_bytecode);
 /* Function to intern strings of codeobjects and quicken the bytecode */
 extern int _PyStaticCode_Init(PyCodeObject *co);
 

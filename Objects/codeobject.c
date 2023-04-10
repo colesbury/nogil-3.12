@@ -468,6 +468,7 @@ init_code(PyCodeObject *co, struct _PyCodeConstructor *con, _PyCodeArray *code_a
     co->_co_linearray = NULL;
     memcpy(code_array->code, PyBytes_AS_STRING(con->code),
            PyBytes_GET_SIZE(con->code));
+    code_array->co = co;
     co->co_code_adaptive = code_array->code;
     int entry_point = 0;
     while (entry_point < Py_SIZE(co) &&
@@ -573,6 +574,19 @@ remove_column_info(PyObject *locations)
 
 /* The caller is responsible for ensuring that the given data is valid. */
 
+_PyCodeArray *
+_PyCodeArray_New(Py_ssize_t size)
+{
+    _PyCodeArray *code_array = PyMem_Malloc(sizeof(_PyCodeArray) + size * sizeof(_Py_CODEUNIT));
+    if (code_array == NULL) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+    memset(code_array, 0, offsetof(_PyCodeArray, code));
+    code_array->size = size;
+    return code_array;
+}
+
 PyCodeObject *
 _PyCode_New(struct _PyCodeConstructor *con)
 {
@@ -609,12 +623,9 @@ _PyCode_New(struct _PyCodeConstructor *con)
     }
 
     Py_ssize_t size = PyBytes_GET_SIZE(con->code) / sizeof(_Py_CODEUNIT);
-    _PyCodeArray *code_array = PyMem_Malloc(sizeof(_PyCodeArray) + PyBytes_GET_SIZE(con->code));
-    code_array->is_static = 0;
-    code_array->size = size;
+    _PyCodeArray *code_array = _PyCodeArray_New(size);
     if (code_array == NULL) {
         Py_XDECREF(replacement_locations);
-        PyErr_NoMemory();
         return NULL;
     }
 
@@ -1786,7 +1797,7 @@ code_dealloc(PyCodeObject *co)
     if (co->_co_linearray) {
         PyMem_Free(co->_co_linearray);
     }
-    _PyCodeArray *array = (_PyCodeArray *)(co->co_code_adaptive - offsetof(_PyCodeArray, code));
+    _PyCodeArray *array = _PyCode_GetCodeArray(co);
     if (!array->is_static) {
         PyMem_Free(array);
     }
@@ -2373,8 +2384,13 @@ _PyCode_ConstantKey(PyObject *op)
 }
 
 void
-_PyStaticCode_Fini(PyCodeObject *co)
+_PyStaticCode_Fini(PyCodeObject *co, char *initial_bytecode)
 {
+    _PyCodeArray *arr = _PyCode_GetCodeArray(co);
+    if (!arr->is_static) {
+        PyMem_Free(arr);
+    }
+    co->co_code_adaptive = initial_bytecode;
     deopt_code(_PyCode_CODE(co), Py_SIZE(co));
     PyMem_Free(co->co_extra);
     if (co->_co_cached != NULL) {
