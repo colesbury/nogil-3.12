@@ -1531,6 +1531,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     _PyObjectQueue *to_dealloc = NULL;
     _PyTime_t t1 = 0;   /* initialize to prevent a compiler warning */
     GCState *gcstate = &tstate->interp->gc;
+    _PyTime_t start = _PyTime_GetMonotonicClock();
 
     // gc_collect_main() must not be called before _PyGC_Init
     // or after _PyGC_Fini()
@@ -1714,6 +1715,14 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     if (reason != GC_REASON_SHUTDOWN) {
         invoke_gc_callback(tstate, "stop", m, n);
     }
+
+    _PyTime_t end = _PyTime_GetMonotonicClock();
+    _PyTime_t deadline = end + (end - start);
+    struct timespec timeout_abs;
+    if (_PyTime_AsTimespec(deadline, &timeout_abs) < 0) {
+        abort();
+    }
+    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &timeout_abs, NULL);
 
     _Py_atomic_store_int(&gcstate->collecting, 0);
     _Py_atomic_store_int(&_PyRuntime.gc_collecting, 0);
