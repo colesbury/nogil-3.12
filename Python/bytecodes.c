@@ -1492,8 +1492,8 @@ dummy_func(
             PREDICT(JUMP_BACKWARD);
         }
 
-        // error: LOAD_ATTR has irregular stack effect
-        inst(LOAD_ATTR) {
+        inst(LOAD_ATTR_PROFILE) {
+            _PyMutex_lock(&_PyRuntime.mutex);
             _PyAttrCache *cache = (_PyAttrCache *)next_instr;
             if (ADAPTIVE_COUNTER_IS_ZERO(cache->counter)) {
                 assert(cframe.use_tracing == 0);
@@ -1501,10 +1501,17 @@ dummy_func(
                 PyObject *name = GETITEM(names, oparg>>1);
                 next_instr--;
                 _Py_Specialize_LoadAttr(owner, next_instr, name);
+                _PyMutex_unlock(&_PyRuntime.mutex);
                 DISPATCH_SAME_OPARG();
             }
             STAT_INC(LOAD_ATTR, deferred);
             DECREMENT_ADAPTIVE_COUNTER(cache->counter);
+            _PyMutex_unlock(&_PyRuntime.mutex);
+            GO_TO_INSTRUCTION(LOAD_ATTR);
+        }
+
+        // error: LOAD_ATTR has irregular stack effect
+        inst(LOAD_ATTR) {
             PyObject *name = GETITEM(names, oparg >> 1);
             PyObject *owner = TOP();
             if (oparg & 1) {
