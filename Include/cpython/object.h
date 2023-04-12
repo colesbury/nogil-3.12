@@ -266,6 +266,7 @@ typedef struct _heaptypeobject {
 } PyHeapTypeObject;
 
 PyAPI_FUNC(const char *) _PyType_Name(PyTypeObject *);
+PyAPI_FUNC(PyObject *) _PyType_LookupCache(PyTypeObject *, PyObject *);
 PyAPI_FUNC(PyObject *) _PyType_Lookup(PyTypeObject *, PyObject *);
 PyAPI_FUNC(PyObject *) _PyType_LookupId(PyTypeObject *, _Py_Identifier *);
 PyAPI_FUNC(PyObject *) _PyObject_LookupSpecialId(PyObject *, _Py_Identifier *);

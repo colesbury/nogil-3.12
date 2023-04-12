@@ -4168,6 +4168,16 @@ _PyType_LookupSlow(PyTypeObject *type, PyObject *name) {
     return res;
 }
 
+PyObject *
+_PyType_LookupCache(PyTypeObject *type, PyObject *name)
+{
+    PyObject *res = _Py_mro_cache_lookup(&type->tp_mro_cache, name);
+    if (res == &_Py_NotFoundStruct) {
+        res = NULL;
+    }
+    return res;
+}
+
 /* Internal API to look for a name through the MRO.
    This returns a borrowed reference, and doesn't set an exception! */
 PyObject *

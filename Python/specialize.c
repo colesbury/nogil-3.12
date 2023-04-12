@@ -547,12 +547,12 @@ analyze_descriptor(PyTypeObject *type, PyObject *name, PyObject **descr, int sto
             getattro_slot == _Py_slot_tp_getattro) {
             /* One or both of __getattribute__ or __getattr__ may have been
              overridden See typeobject.c for why these functions are special. */
-            PyObject *getattribute = _PyType_Lookup(type,
+            PyObject *getattribute = _PyType_LookupCache(type,
                 &_Py_ID(__getattribute__));
             PyInterpreterState *interp = _PyInterpreterState_GET();
             bool has_custom_getattribute = getattribute != NULL &&
                 getattribute != interp->callable_cache.object__getattribute__;
-            has_getattr = _PyType_Lookup(type, &_Py_ID(__getattr__)) != NULL;
+            has_getattr = _PyType_LookupCache(type, &_Py_ID(__getattr__)) != NULL;
             if (has_custom_getattribute) {
                 if (getattro_slot == _Py_slot_tp_getattro &&
                     !has_getattr &&
@@ -578,7 +578,7 @@ analyze_descriptor(PyTypeObject *type, PyObject *name, PyObject **descr, int sto
             return GETSET_OVERRIDDEN;
         }
     }
-    PyObject *descriptor = _PyType_Lookup(type, name);
+    PyObject *descriptor = _PyType_LookupCache(type, name);
     *descr = descriptor;
     if (descriptor == NULL) {
         return ABSENT;
@@ -603,7 +603,7 @@ analyze_descriptor(PyTypeObject *type, PyObject *name, PyObject **descr, int sto
             return has_getattr ? GETSET_OVERRIDDEN : PROPERTY;
         }
         if (PyUnicode_CompareWithASCIIString(name, "__class__") == 0) {
-            if (descriptor == _PyType_Lookup(&PyBaseObject_Type, name)) {
+            if (descriptor == _PyType_LookupCache(&PyBaseObject_Type, name)) {
                 return DUNDER_CLASS;
             }
         }
@@ -660,7 +660,7 @@ specialize_dict_access(
     }
     else {
         PyDictObject *dict = (PyDictObject *)_PyDictOrValues_GetDict(dorv);
-        if (dict == NULL || !PyDict_CheckExact(dict)) {
+        if (dict == NULL || !PyDict_CheckExact(dict) || !DK_IS_UNICODE(dict->ma_keys)) {
             SPECIALIZATION_FAIL(base_op, SPEC_FAIL_NO_DICT);
             return 0;
         }
@@ -675,6 +675,7 @@ specialize_dict_access(
             return 0;
         }
         cache->index = (uint16_t)index;
+        assert(type->tp_version_tag != 0);
         write_u32(cache->version, type->tp_version_tag);
         _py_set_opcode(instr, hint_op);
     }
@@ -713,6 +714,10 @@ _Py_Specialize_LoadAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
             goto fail;
         }
         goto success;
+    }
+    if (type->tp_version_tag == 0) {
+        SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_OTHER);
+        goto fail;
     }
     PyObject *descr = NULL;
     DescriptorClassification kind = analyze_descriptor(type, name, &descr, 0);
@@ -880,6 +885,10 @@ _Py_Specialize_StoreAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
         SPECIALIZATION_FAIL(STORE_ATTR, SPEC_FAIL_OVERRIDDEN);
         goto fail;
     }
+    if (type->tp_version_tag == 0) {
+        SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_OTHER);
+        goto fail;
+    }
     PyObject *descr;
     DescriptorClassification kind = analyze_descriptor(type, name, &descr, 1);
     switch(kind) {
@@ -1001,7 +1010,7 @@ specialize_class_load_attr(PyObject *owner, _Py_CODEUNIT *instr,
                              PyObject *name)
 {
     _PyLoadMethodCache *cache = (_PyLoadMethodCache *)(instr + 1);
-    if (!PyType_CheckExact(owner) || _PyType_Lookup(Py_TYPE(owner), name)) {
+    if (!PyType_CheckExact(owner) || _PyType_LookupCache(Py_TYPE(owner), name)) {
         SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_ATTR_METACLASS_ATTRIBUTE);
         return -1;
     }
@@ -1350,7 +1359,7 @@ _Py_Specialize_BinarySubscr(
         goto success;
     }
     PyTypeObject *cls = Py_TYPE(container);
-    PyObject *descriptor = _PyType_Lookup(cls, &_Py_ID(__getitem__));
+    PyObject *descriptor = _PyType_LookupCache(cls, &_Py_ID(__getitem__));
     if (descriptor && Py_TYPE(descriptor) == &PyFunction_Type) {
         if (!(container_type->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
             SPECIALIZATION_FAIL(BINARY_SUBSCR, SPEC_FAIL_SUBSCR_NOT_HEAP_TYPE);
@@ -1474,7 +1483,7 @@ _Py_Specialize_StoreSubscr(PyObject *container, PyObject *sub, _Py_CODEUNIT *ins
         }
         goto fail;
     }
-    PyObject *descriptor = _PyType_Lookup(container_type, &_Py_ID(__setitem__));
+    PyObject *descriptor = _PyType_LookupCache(container_type, &_Py_ID(__setitem__));
     if (descriptor && Py_TYPE(descriptor) == &PyFunction_Type) {
         PyFunctionObject *func = (PyFunctionObject *)descriptor;
         PyCodeObject *code = (PyCodeObject *)func->func_code;
