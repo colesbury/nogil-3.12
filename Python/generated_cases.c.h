@@ -409,15 +409,18 @@
             static_assert(INLINE_CACHE_ENTRIES_BINARY_SUBSCR == 4, "incorrect cache size");
             PyObject *sub = PEEK(1);
             PyObject *container = PEEK(2);
+            _PyMutex_lock(&_PyRuntime.mutex);
             _PyBinarySubscrCache *cache = (_PyBinarySubscrCache *)next_instr;
             if (ADAPTIVE_COUNTER_IS_ZERO(cache->counter)) {
                 assert(cframe.use_tracing == 0);
                 next_instr--;
                 _Py_Specialize_BinarySubscr(container, sub, next_instr);
+                _PyMutex_unlock(&_PyRuntime.mutex);
                 DISPATCH_SAME_OPARG();
             }
             STAT_INC(BINARY_SUBSCR, deferred);
             DECREMENT_ADAPTIVE_COUNTER(cache->counter);
+            _PyMutex_unlock(&_PyRuntime.mutex);
             GO_TO_INSTRUCTION(BINARY_SUBSCR_GENERIC);
         }
 
@@ -603,15 +606,18 @@
             PyObject *sub = PEEK(1);
             PyObject *container = PEEK(2);
             uint16_t counter = read_u16(&next_instr[0].cache);
+            _PyMutex_lock(&_PyRuntime.mutex);
             if (ADAPTIVE_COUNTER_IS_ZERO(counter)) {
                 assert(cframe.use_tracing == 0);
                 next_instr--;
                 _Py_Specialize_StoreSubscr(container, sub, next_instr);
+                _PyMutex_unlock(&_PyRuntime.mutex);
                 DISPATCH_SAME_OPARG();
             }
             STAT_INC(STORE_SUBSCR, deferred);
             _PyStoreSubscrCache *cache = (_PyStoreSubscrCache *)next_instr;
             DECREMENT_ADAPTIVE_COUNTER(cache->counter);
+            _PyMutex_unlock(&_PyRuntime.mutex);
             GO_TO_INSTRUCTION(STORE_SUBSCR_GENERIC);
         }
 
@@ -1105,16 +1111,19 @@
 
         TARGET(UNPACK_SEQUENCE) {
             PREDICTED(UNPACK_SEQUENCE);
+            _PyMutex_lock(&_PyRuntime.mutex);
             _PyUnpackSequenceCache *cache = (_PyUnpackSequenceCache *)next_instr;
             if (ADAPTIVE_COUNTER_IS_ZERO(cache->counter)) {
                 assert(cframe.use_tracing == 0);
                 PyObject *seq = TOP();
                 next_instr--;
                 _Py_Specialize_UnpackSequence(seq, next_instr, oparg);
+                _PyMutex_unlock(&_PyRuntime.mutex);
                 DISPATCH_SAME_OPARG();
             }
             STAT_INC(UNPACK_SEQUENCE, deferred);
             DECREMENT_ADAPTIVE_COUNTER(cache->counter);
+            _PyMutex_unlock(&_PyRuntime.mutex);
             GO_TO_INSTRUCTION(UNPACK_SEQUENCE_GENERIC);
         }
 
@@ -1191,16 +1200,19 @@
             PREDICTED(STORE_ATTR);
             PyObject *owner = PEEK(1);
             uint16_t counter = read_u16(&next_instr[0].cache);
+            _PyMutex_lock(&_PyRuntime.mutex);
             if (ADAPTIVE_COUNTER_IS_ZERO(counter)) {
                 assert(cframe.use_tracing == 0);
                 PyObject *name = GETITEM(names, oparg);
                 next_instr--;
                 _Py_Specialize_StoreAttr(owner, next_instr, name);
+                _PyMutex_unlock(&_PyRuntime.mutex);
                 DISPATCH_SAME_OPARG();
             }
             STAT_INC(STORE_ATTR, deferred);
             _PyAttrCache *cache = (_PyAttrCache *)next_instr;
             DECREMENT_ADAPTIVE_COUNTER(cache->counter);
+            _PyMutex_unlock(&_PyRuntime.mutex);
             GO_TO_INSTRUCTION(STORE_ATTR_GENERIC);
         }
 
@@ -1320,16 +1332,19 @@
 
         TARGET(LOAD_GLOBAL) {
             PREDICTED(LOAD_GLOBAL);
+            _PyMutex_lock(&_PyRuntime.mutex);
             _PyLoadGlobalCache *cache = (_PyLoadGlobalCache *)next_instr;
             if (ADAPTIVE_COUNTER_IS_ZERO(cache->counter)) {
                 assert(cframe.use_tracing == 0);
                 PyObject *name = GETITEM(names, oparg>>1);
                 next_instr--;
                 _Py_Specialize_LoadGlobal(GLOBALS(), BUILTINS(), next_instr, name);
+                _PyMutex_unlock(&_PyRuntime.mutex);
                 DISPATCH_SAME_OPARG();
             }
             STAT_INC(LOAD_GLOBAL, deferred);
             DECREMENT_ADAPTIVE_COUNTER(cache->counter);
+            _PyMutex_unlock(&_PyRuntime.mutex);
             GO_TO_INSTRUCTION(LOAD_GLOBAL_GENERIC);
         }
 
@@ -2112,15 +2127,18 @@
             PREDICTED(COMPARE_OP);
             PyObject *right = PEEK(1);
             PyObject *left = PEEK(2);
+            _PyMutex_lock(&_PyRuntime.mutex);
             _PyCompareOpCache *cache = (_PyCompareOpCache *)next_instr;
             if (ADAPTIVE_COUNTER_IS_ZERO(cache->counter)) {
                 assert(cframe.use_tracing == 0);
                 next_instr--;
                 _Py_Specialize_CompareOp(left, right, next_instr, oparg);
+                _PyMutex_unlock(&_PyRuntime.mutex);
                 DISPATCH_SAME_OPARG();
             }
             STAT_INC(COMPARE_OP, deferred);
             DECREMENT_ADAPTIVE_COUNTER(cache->counter);
+            _PyMutex_unlock(&_PyRuntime.mutex);
             GO_TO_INSTRUCTION(COMPARE_OP_GENERIC);
         }
 
@@ -2617,15 +2635,18 @@
 
         TARGET(FOR_ITER) {
             PREDICTED(FOR_ITER);
+            _PyMutex_lock(&_PyRuntime.mutex);
             _PyForIterCache *cache = (_PyForIterCache *)next_instr;
             if (ADAPTIVE_COUNTER_IS_ZERO(cache->counter)) {
                 assert(cframe.use_tracing == 0);
                 next_instr--;
                 _Py_Specialize_ForIter(TOP(), next_instr, oparg);
+                _PyMutex_unlock(&_PyRuntime.mutex);
                 DISPATCH_SAME_OPARG();
             }
             STAT_INC(FOR_ITER, deferred);
             DECREMENT_ADAPTIVE_COUNTER(cache->counter);
+            _PyMutex_unlock(&_PyRuntime.mutex);
             GO_TO_INSTRUCTION(FOR_ITER_GENERIC);
         }
 
@@ -2955,6 +2976,7 @@
 
         TARGET(CALL) {
             PREDICTED(CALL);
+            _PyMutex_lock(&_PyRuntime.mutex);
             _PyCallCache *cache = (_PyCallCache *)next_instr;
             if (ADAPTIVE_COUNTER_IS_ZERO(cache->counter)) {
                 assert(cframe.use_tracing == 0);
@@ -2963,10 +2985,12 @@
                 PyObject *callable = PEEK(nargs + 1);
                 next_instr--;
                 _Py_Specialize_Call(callable, next_instr, nargs, kwnames);
+                _PyMutex_unlock(&_PyRuntime.mutex);
                 DISPATCH_SAME_OPARG();
             }
             STAT_INC(CALL, deferred);
             DECREMENT_ADAPTIVE_COUNTER(cache->counter);
+            _PyMutex_unlock(&_PyRuntime.mutex);
             GO_TO_INSTRUCTION(CALL_GENERIC);
         }
 
@@ -3709,14 +3733,17 @@
             PyObject *rhs = PEEK(1);
             PyObject *lhs = PEEK(2);
             _PyBinaryOpCache *cache = (_PyBinaryOpCache *)next_instr;
+            _PyMutex_lock(&_PyRuntime.mutex);
             if (ADAPTIVE_COUNTER_IS_ZERO(cache->counter)) {
                 assert(cframe.use_tracing == 0);
                 next_instr--;
                 _Py_Specialize_BinaryOp(lhs, rhs, next_instr, oparg, &GETLOCAL(0));
+                _PyMutex_unlock(&_PyRuntime.mutex);
                 DISPATCH_SAME_OPARG();
             }
             STAT_INC(BINARY_OP, deferred);
             DECREMENT_ADAPTIVE_COUNTER(cache->counter);
+            _PyMutex_unlock(&_PyRuntime.mutex);
             GO_TO_INSTRUCTION(BINARY_OP_GENERIC);
         }
 

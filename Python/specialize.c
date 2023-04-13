@@ -692,6 +692,11 @@ _Py_Specialize_LoadAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
 #if _Py_NO_SPECIALIZATIONS
     return;
 #endif
+    if (instr->opcode != LOAD_ATTR) {
+        // another thread concurrently specialized this instruction
+        STAT_INC(LOAD_ATTR, failure);
+        return;
+    }
     assert(_PyOpcode_Caches[LOAD_ATTR] == INLINE_CACHE_ENTRIES_LOAD_ATTR);
     _PyAttrCache *cache = (_PyAttrCache *)(instr + 1);
     PyTypeObject *type = Py_TYPE(owner);
@@ -871,6 +876,11 @@ _Py_Specialize_StoreAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
 #if _Py_NO_SPECIALIZATIONS
     return;
 #endif
+    if (instr->opcode != STORE_ATTR) {
+        // another thread concurrently specialized this instruction
+        STAT_INC(STORE_ATTR, failure);
+        return;
+    }
     assert(_PyOpcode_Caches[STORE_ATTR] == INLINE_CACHE_ENTRIES_STORE_ATTR);
     _PyAttrCache *cache = (_PyAttrCache *)(instr + 1);
     PyTypeObject *type = Py_TYPE(owner);
@@ -1149,6 +1159,11 @@ _Py_Specialize_LoadGlobal(
 #if _Py_NO_SPECIALIZATIONS
     return;
 #endif
+    if (instr->opcode != LOAD_GLOBAL) {
+        // another thread concurrently specialized this instruction
+        STAT_INC(LOAD_GLOBAL, failure);
+        return;
+    }
     assert(_PyOpcode_Caches[LOAD_GLOBAL] == INLINE_CACHE_ENTRIES_LOAD_GLOBAL);
     /* Use inline cache */
     _PyLoadGlobalCache *cache = (_PyLoadGlobalCache *)(instr + 1);
@@ -1324,6 +1339,11 @@ _Py_Specialize_BinarySubscr(
 #if _Py_NO_SPECIALIZATIONS
     return;
 #endif
+    if (instr->opcode != BINARY_SUBSCR) {
+        // another thread concurrently specialized this instruction
+        STAT_INC(BINARY_SUBSCR, failure);
+        return;
+    }
     assert(_PyOpcode_Caches[BINARY_SUBSCR] ==
            INLINE_CACHE_ENTRIES_BINARY_SUBSCR);
     _PyBinarySubscrCache *cache = (_PyBinarySubscrCache *)(instr + 1);
@@ -1409,6 +1429,11 @@ _Py_Specialize_StoreSubscr(PyObject *container, PyObject *sub, _Py_CODEUNIT *ins
 #if _Py_NO_SPECIALIZATIONS
     return;
 #endif
+    if (instr->opcode != STORE_SUBSCR) {
+        // another thread concurrently specialized this instruction
+        STAT_INC(STORE_SUBSCR, failure);
+        return;
+    }
     _PyStoreSubscrCache *cache = (_PyStoreSubscrCache *)(instr + 1);
     PyTypeObject *container_type = Py_TYPE(container);
     if (container_type == &PyList_Type) {
@@ -1791,6 +1816,11 @@ _Py_Specialize_Call(PyObject *callable, _Py_CODEUNIT *instr, int nargs,
 #if _Py_NO_SPECIALIZATIONS
     return;
 #endif
+    if (instr->opcode != CALL) {
+        // another thread concurrently specialized this instruction
+        STAT_INC(CALL, failure);
+        return;
+    }
     assert(_PyOpcode_Caches[CALL] == INLINE_CACHE_ENTRIES_CALL);
     _PyCallCache *cache = (_PyCallCache *)(instr + 1);
     int fail;
@@ -1912,6 +1942,11 @@ _Py_Specialize_BinaryOp(PyObject *lhs, PyObject *rhs, _Py_CODEUNIT *instr,
 #if _Py_NO_SPECIALIZATIONS
     return;
 #endif
+    if (instr->opcode != BINARY_OP) {
+        // another thread concurrently specialized this instruction
+        STAT_INC(BINARY_OP, failure);
+        return;
+    }
     assert(_PyOpcode_Caches[BINARY_OP] == INLINE_CACHE_ENTRIES_BINARY_OP);
     _PyBinaryOpCache *cache = (_PyBinaryOpCache *)(instr + 1);
     switch (oparg) {
@@ -2036,6 +2071,11 @@ _Py_Specialize_CompareOp(PyObject *lhs, PyObject *rhs, _Py_CODEUNIT *instr,
 #if _Py_NO_SPECIALIZATIONS
     return;
 #endif
+    if (instr->opcode != COMPARE_OP) {
+        // another thread concurrently specialized this instruction
+        STAT_INC(COMPARE_OP, failure);
+        return;
+    }
     assert(_PyOpcode_Caches[COMPARE_OP] == INLINE_CACHE_ENTRIES_COMPARE_OP);
     _PyCompareOpCache *cache = (_PyCompareOpCache *)(instr + 1);
     int next_opcode = _Py_OPCODE(instr[INLINE_CACHE_ENTRIES_COMPARE_OP + 1]);
@@ -2114,6 +2154,11 @@ _Py_Specialize_UnpackSequence(PyObject *seq, _Py_CODEUNIT *instr, int oparg)
 #if _Py_NO_SPECIALIZATIONS
     return;
 #endif
+    if (instr->opcode != UNPACK_SEQUENCE) {
+        // another thread concurrently specialized this instruction
+        STAT_INC(UNPACK_SEQUENCE, failure);
+        return;
+    }
     assert(_PyOpcode_Caches[UNPACK_SEQUENCE] ==
            INLINE_CACHE_ENTRIES_UNPACK_SEQUENCE);
     _PyUnpackSequenceCache *cache = (_PyUnpackSequenceCache *)(instr + 1);
@@ -2226,6 +2271,11 @@ _Py_Specialize_ForIter(PyObject *iter, _Py_CODEUNIT *instr, int oparg)
 #if _Py_NO_SPECIALIZATIONS
     return;
 #endif
+    if (instr->opcode != FOR_ITER) {
+        // another thread concurrently specialized this instruction
+        STAT_INC(FOR_ITER, failure);
+        return;
+    }
     assert(_PyOpcode_Caches[FOR_ITER] == INLINE_CACHE_ENTRIES_FOR_ITER);
     _PyForIterCache *cache = (_PyForIterCache *)(instr + 1);
     PyTypeObject *tp = Py_TYPE(iter);
