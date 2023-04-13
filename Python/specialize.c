@@ -271,13 +271,13 @@ _PyCode_Quicken(PyCodeObject *code)
     for (int i = 0; i < Py_SIZE(code); i++) {
         int opcode = _PyOpcode_Deopt[_Py_OPCODE(instructions[i])];
         int caches = _PyOpcode_Caches[opcode];
-        if (opcode == LOAD_ATTR) {
-            instructions[i].opcode = LOAD_ATTR_PROFILE;
-            memset(&instructions[i + 1], 0, caches * sizeof(_Py_CODEUNIT));
-            previous_opcode = 0;
-            i += caches;
-            continue;
-        }
+        // if (opcode == LOAD_ATTR) {
+        //     instructions[i].opcode = LOAD_ATTR_PROFILE;
+        //     memset(&instructions[i + 1], 0, caches * sizeof(_Py_CODEUNIT));
+        //     previous_opcode = 0;
+        //     i += caches;
+        //     continue;
+        // }
         if (caches) {
             instructions[i + 1].cache = adaptive_counter_warmup();
             previous_opcode = 0;
@@ -547,12 +547,12 @@ analyze_descriptor(PyTypeObject *type, PyObject *name, PyObject **descr, int sto
             getattro_slot == _Py_slot_tp_getattro) {
             /* One or both of __getattribute__ or __getattr__ may have been
              overridden See typeobject.c for why these functions are special. */
-            PyObject *getattribute = _PyType_LookupCache(type,
+            PyObject *getattribute = _PyType_Lookup(type,
                 &_Py_ID(__getattribute__));
             PyInterpreterState *interp = _PyInterpreterState_GET();
             bool has_custom_getattribute = getattribute != NULL &&
                 getattribute != interp->callable_cache.object__getattribute__;
-            has_getattr = _PyType_LookupCache(type, &_Py_ID(__getattr__)) != NULL;
+            has_getattr = _PyType_Lookup(type, &_Py_ID(__getattr__)) != NULL;
             if (has_custom_getattribute) {
                 if (getattro_slot == _Py_slot_tp_getattro &&
                     !has_getattr &&
@@ -856,7 +856,7 @@ _Py_Specialize_LoadAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
 fail:
     STAT_INC(LOAD_ATTR, failure);
     assert(!PyErr_Occurred());
-    _py_set_opcode(instr, LOAD_ATTR);
+    _py_set_opcode(instr, LOAD_ATTR_GENERIC);
     cache->counter = adaptive_counter_backoff(cache->counter);
     return;
 success:
@@ -958,7 +958,7 @@ _Py_Specialize_StoreAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
 fail:
     STAT_INC(STORE_ATTR, failure);
     assert(!PyErr_Occurred());
-    _py_set_opcode(instr, STORE_ATTR);
+    _py_set_opcode(instr, STORE_ATTR_GENERIC);
     cache->counter = adaptive_counter_backoff(cache->counter);
     return;
 success:
@@ -1222,7 +1222,7 @@ _Py_Specialize_LoadGlobal(
 fail:
     STAT_INC(LOAD_GLOBAL, failure);
     assert(!PyErr_Occurred());
-    _py_set_opcode(instr, LOAD_GLOBAL);
+    _py_set_opcode(instr, LOAD_GLOBAL_GENERIC);
     cache->counter = adaptive_counter_backoff(cache->counter);
     return;
 success:
@@ -1394,7 +1394,7 @@ _Py_Specialize_BinarySubscr(
 fail:
     STAT_INC(BINARY_SUBSCR, failure);
     assert(!PyErr_Occurred());
-    _py_set_opcode(instr, BINARY_SUBSCR);
+    _py_set_opcode(instr, BINARY_SUBSCR_GENERIC);
     cache->counter = adaptive_counter_backoff(cache->counter);
     return;
 success:
@@ -1501,7 +1501,7 @@ _Py_Specialize_StoreSubscr(PyObject *container, PyObject *sub, _Py_CODEUNIT *ins
 fail:
     STAT_INC(STORE_SUBSCR, failure);
     assert(!PyErr_Occurred());
-    _py_set_opcode(instr, STORE_SUBSCR);
+    _py_set_opcode(instr, STORE_SUBSCR_GENERIC);
     cache->counter = adaptive_counter_backoff(cache->counter);
     return;
 success:
@@ -1825,7 +1825,7 @@ _Py_Specialize_Call(PyObject *callable, _Py_CODEUNIT *instr, int nargs,
     if (fail) {
         STAT_INC(CALL, failure);
         assert(!PyErr_Occurred());
-        _py_set_opcode(instr, CALL);
+        _py_set_opcode(instr, CALL_GENERIC);
         cache->counter = adaptive_counter_backoff(cache->counter);
     }
     else {
@@ -1971,7 +1971,7 @@ _Py_Specialize_BinaryOp(PyObject *lhs, PyObject *rhs, _Py_CODEUNIT *instr,
     }
     SPECIALIZATION_FAIL(BINARY_OP, binary_op_fail_kind(oparg, lhs, rhs));
     STAT_INC(BINARY_OP, failure);
-    _py_set_opcode(instr, BINARY_OP);
+    _py_set_opcode(instr, BINARY_OP_GENERIC);
     cache->counter = adaptive_counter_backoff(cache->counter);
     return;
 success:
@@ -2086,7 +2086,7 @@ _Py_Specialize_CompareOp(PyObject *lhs, PyObject *rhs, _Py_CODEUNIT *instr,
     SPECIALIZATION_FAIL(COMPARE_OP, compare_op_fail_kind(lhs, rhs));
 failure:
     STAT_INC(COMPARE_OP, failure);
-    _py_set_opcode(instr, COMPARE_OP);
+    _py_set_opcode(instr, COMPARE_OP_GENERIC);
     cache->counter = adaptive_counter_backoff(cache->counter);
     return;
 success:
@@ -2140,7 +2140,7 @@ _Py_Specialize_UnpackSequence(PyObject *seq, _Py_CODEUNIT *instr, int oparg)
     SPECIALIZATION_FAIL(UNPACK_SEQUENCE, unpack_sequence_fail_kind(seq));
 failure:
     STAT_INC(UNPACK_SEQUENCE, failure);
-    _py_set_opcode(instr, UNPACK_SEQUENCE);
+    _py_set_opcode(instr, UNPACK_SEQUENCE_GENERIC);
     cache->counter = adaptive_counter_backoff(cache->counter);
     return;
 success:
@@ -2251,7 +2251,7 @@ _Py_Specialize_ForIter(PyObject *iter, _Py_CODEUNIT *instr, int oparg)
     SPECIALIZATION_FAIL(FOR_ITER,
                         _PySpecialization_ClassifyIterator(iter));
     STAT_INC(FOR_ITER, failure);
-    _py_set_opcode(instr, FOR_ITER);
+    _py_set_opcode(instr, FOR_ITER_GENERIC);
     cache->counter = adaptive_counter_backoff(cache->counter);
     return;
 success:
