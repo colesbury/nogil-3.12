@@ -1387,12 +1387,18 @@ delete_garbage(PyThreadState *tstate, GCState *gcstate,
 static void
 clear_freelists(PyInterpreterState *interp)
 {
-    _PyTuple_ClearFreeList(interp);
-    _PyFloat_ClearFreeList(interp);
-    _PyList_ClearFreeList(interp);
-    _PyDict_ClearFreeList(interp);
-    _PyAsyncGen_ClearFreeLists(interp);
-    _PyContext_ClearFreeList(interp);
+    HEAD_LOCK(&_PyRuntime);
+    PyThreadState *tstate = interp->threads.head;
+    while (tstate != NULL) {
+        _PyTuple_ClearFreeList(tstate);
+        _PyFloat_ClearFreeList(tstate);
+        _PyList_ClearFreeList(tstate);
+        _PyDict_ClearFreeList(tstate);
+        _PyAsyncGen_ClearFreeLists(tstate);
+        _PyContext_ClearFreeList(tstate);
+        tstate = tstate->next;
+    }
+    HEAD_UNLOCK(&_PyRuntime);
 }
 
 /* Deduce which objects among "base" are unreachable from outside the list
