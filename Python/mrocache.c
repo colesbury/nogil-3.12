@@ -12,20 +12,6 @@
 #define _Py_MRO_CACHE_MIN_SIZE 8
 #define _Py_MRO_CACHE_MAX_SIZE 65536
 
-static PyObject *
-not_found_repr(PyObject *self)
-{
-    return PyUnicode_FromString("<not found>");
-}
-
-static PyTypeObject _PyNotFound_Type = {
-    PyVarObject_HEAD_INIT(&PyType_Type, 0)
-    .tp_name = "<not found> type",
-    .tp_repr = not_found_repr,
-};
-
-PyObject _Py_NotFoundStruct = _PyObject_STRUCT_INIT(&_PyNotFound_Type);
-
 /* NOTE: mask is used to index array in bytes */
 static uint32_t
 mask_from_capacity(size_t capacity)
@@ -58,7 +44,8 @@ buckets_free(void *ptr)
     _Py_mro_cache_buckets *buckets = (_Py_mro_cache_buckets *)ptr;
     Py_ssize_t capacity = buckets->u.capacity;
     for (Py_ssize_t i = 0; i < capacity; i++) {
-        Py_XDECREF(buckets->array[i].value);
+        PyObject *value = (PyObject *)(buckets->array[i].value & ~1);
+        Py_XDECREF(value);
     }
     PyMem_Free(buckets);
 }
@@ -125,6 +112,7 @@ allocate_buckets(Py_ssize_t capacity)
 void
 _Py_mro_cache_erase(_Py_mro_cache *cache)
 {
+    assert(_PyMutex_is_locked(&_PyRuntime.mutex));
     _Py_mro_cache_buckets *old = get_buckets(cache);
     if (old->available == 0 && old->used == 0) {
         return;
@@ -175,10 +163,8 @@ void
 _Py_mro_cache_insert(_Py_mro_cache *cache, PyObject *name, PyObject *value)
 {
     assert(PyUnicode_CheckExact(name) && PyUnicode_CHECK_INTERNED(name));
-
-    if (value == NULL) {
-        value = &_Py_NotFoundStruct;
-    }
+    // FIXME(sgross): need to lock runtime mutex
+    // assert(_PyMutex_is_locked(&_PyRuntime.mutex));
 
     _Py_mro_cache_buckets *buckets = get_buckets(cache);
     if (buckets->available == 0) {
@@ -197,8 +183,9 @@ _Py_mro_cache_insert(_Py_mro_cache *cache, PyObject *name, PyObject *value)
     Py_ssize_t ix = (hash & cache->mask) / sizeof(_Py_mro_cache_entry);
     for (;;) {
         if (buckets->array[ix].name == NULL) {
-            buckets->array[ix].name = name;
-            buckets->array[ix].value = Py_NewRef(value);
+            uintptr_t v = value ? (uintptr_t)Py_NewRef(value) : 1;
+            _Py_atomic_store_ptr_relaxed(&buckets->array[ix].name, name);
+            _Py_atomic_store_uintptr_relaxed(&buckets->array[ix].value, v);
             assert(buckets->available > 0);
             buckets->available--;
             buckets->used++;
@@ -220,11 +207,16 @@ _Py_mro_cache_as_dict(_Py_mro_cache *cache)
         return NULL;
     }
 
+    assert(_PyMutex_is_locked(&_PyRuntime.mutex));
     _Py_mro_cache_entry *entry = cache->buckets;
     Py_ssize_t capacity = capacity_from_mask(cache->mask);
     for (Py_ssize_t i = 0; i < capacity; i++, entry++) {
         if (entry->name) {
-            int err = PyDict_SetItem(dict, entry->name, entry->value);
+            PyObject *value = (PyObject *)(entry->value & ~1);
+            if (value == NULL) {
+                value = Py_None;
+            }
+            int err = PyDict_SetItem(dict, entry->name, value);
             if (err < 0) {
                 Py_CLEAR(dict);
                 return NULL;
@@ -238,6 +230,7 @@ _Py_mro_cache_as_dict(_Py_mro_cache *cache)
 void
 _Py_mro_cache_init_type(PyTypeObject *type)
 {
+    assert(_PyMutex_is_locked(&_PyRuntime.mutex));
     PyInterpreterState *interp = _PyInterpreterState_GET();
     if (type->tp_mro_cache.buckets == NULL) {
         struct _Py_mro_cache_buckets *empty_buckets = interp->mro_cache.empty_buckets;
@@ -267,8 +260,9 @@ _Py_mro_cache_visit(_Py_mro_cache *cache, visitproc visit, void *arg)
     }
     Py_ssize_t capacity = capacity_from_mask(cache->mask);
     for (Py_ssize_t i = 0; i < capacity; i++, entry++) {
-        if (entry->value) {
-            int err = visit(entry->value, arg);
+        PyObject *value = (PyObject *)(entry->value & ~1);
+        if (value) {
+            int err = visit(value, arg);
             if (err != 0) {
                 return err;
             }

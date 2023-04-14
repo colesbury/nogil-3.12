@@ -497,9 +497,11 @@ type_mro_modified(PyTypeObject *type, PyObject *bases) {
     }
     return;
  clear:
+    _PyMutex_lock(&_PyRuntime.mutex);
     _Py_mro_cache_erase(&type->tp_mro_cache);
     type->tp_flags &= ~Py_TPFLAGS_VALID_VERSION_TAG;
     type->tp_version_tag = 0; /* 0 is not a valid version tag */
+    _PyMutex_unlock(&_PyRuntime.mutex);
 }
 
 static unsigned int
@@ -4162,6 +4164,7 @@ _PyType_LookupSlow(PyTypeObject *type, PyObject *name) {
     assert(!PyErr_Occurred());
 
     if (MCACHE_CACHEABLE_NAME(name) && assign_version_tag(type)) {
+        // TODO(sgross): want consistency with find_name_in_mro
         _Py_mro_cache_insert(&type->tp_mro_cache, name, res);
     }
 
@@ -4171,11 +4174,8 @@ _PyType_LookupSlow(PyTypeObject *type, PyObject *name) {
 PyObject *
 _PyType_LookupCache(PyTypeObject *type, PyObject *name)
 {
-    PyObject *res = _Py_mro_cache_lookup(&type->tp_mro_cache, name);
-    if (res == &_Py_NotFoundStruct) {
-        res = NULL;
-    }
-    return res;
+    _Py_mro_cache_result r = _Py_mro_cache_lookup(&type->tp_mro_cache, name);
+    return r.value;
 }
 
 /* Internal API to look for a name through the MRO.
@@ -4183,14 +4183,11 @@ _PyType_LookupCache(PyTypeObject *type, PyObject *name)
 PyObject *
 _PyType_Lookup(PyTypeObject *type, PyObject *name)
 {
-    PyObject *res = _Py_mro_cache_lookup(&type->tp_mro_cache, name);
-    if (res != NULL) {
+    _Py_mro_cache_result r = _Py_mro_cache_lookup(&type->tp_mro_cache, name);
+    if (r.hit) {
         OBJECT_STAT_INC_COND(type_cache_hits, !is_dunder_name(name));
         OBJECT_STAT_INC_COND(type_cache_dunder_hits, is_dunder_name(name));
-        if (res == &_Py_NotFoundStruct) {
-            res = NULL;
-        }
-        return res;
+        return r.value;
     }
     OBJECT_STAT_INC_COND(type_cache_misses, !is_dunder_name(name));
     OBJECT_STAT_INC_COND(type_cache_dunder_misses, is_dunder_name(name));
@@ -6967,7 +6964,9 @@ PyType_Ready(PyTypeObject *type)
         type->tp_flags |= Py_TPFLAGS_IMMUTABLETYPE;
     }
 
+    _PyMutex_lock(&_PyRuntime.mutex);
     _Py_mro_cache_init_type(type);
+    _PyMutex_unlock(&_PyRuntime.mutex);
 
     if (type_ready(type) < 0) {
         type->tp_flags &= ~Py_TPFLAGS_READYING;

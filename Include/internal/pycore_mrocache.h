@@ -12,7 +12,7 @@ extern "C" {
 
 typedef struct _Py_mro_cache_entry {
     PyObject *name;     /* name (interned unicode; immortal) */
-    PyObject *value;    /* resolved function (owned ref) */
+    uintptr_t value;    /* resolved function (owned ref), or 0=not cached 1=not present */
 } _Py_mro_cache_entry;
 
 typedef struct _Py_mro_cache_buckets {
@@ -43,9 +43,27 @@ extern void _Py_mro_cache_insert(_Py_mro_cache *cache, PyObject *name, PyObject 
 extern PyObject *_Py_mro_cache_as_dict(_Py_mro_cache *cache);
 extern PyObject _Py_NotFoundStruct;
 
-static inline PyObject *
+typedef struct _Py_mro_cache_result {
+    int hit;
+    PyObject *value;
+} _Py_mro_cache_result;
+
+static inline _Py_mro_cache_result
+_Py_mro_cache_make_result(uintptr_t *ptr)
+{
+    uintptr_t value = _Py_atomic_load_uintptr_relaxed(ptr);
+    _Py_mro_cache_result result = {
+        .hit = value != 0,
+        .value = (PyObject *)(value & ~1),
+    };
+    return result;
+}
+
+static inline struct _Py_mro_cache_result
 _Py_mro_cache_lookup(_Py_mro_cache *cache, PyObject *name)
 {
+    struct _Py_mro_cache_result result;
+
     Py_hash_t hash = ((PyASCIIObject *)name)->hash;
     uint32_t mask = _Py_atomic_load_uint32(&cache->mask);
     _Py_mro_cache_entry *first = _Py_atomic_load_ptr_relaxed(&cache->buckets);
@@ -55,13 +73,15 @@ _Py_mro_cache_lookup(_Py_mro_cache *cache, PyObject *name)
 
     PyObject *entry_name = _Py_atomic_load_ptr_relaxed(&bucket->name);
     if (_PY_LIKELY(entry_name == name)) {
-        return _Py_atomic_load_ptr_relaxed(&bucket->value);
+        return _Py_mro_cache_make_result(&bucket->value);
     }
 
     /* First loop */
     while (1) {
         if (entry_name == NULL) {
-            return NULL;
+            result.hit = 0;
+            result.value = NULL;
+            return result;
         }
         if (bucket == first) {
             break;
@@ -69,7 +89,7 @@ _Py_mro_cache_lookup(_Py_mro_cache *cache, PyObject *name)
         bucket--;
         entry_name = _Py_atomic_load_ptr_relaxed(&bucket->name);
         if (entry_name == name) {
-            return _Py_atomic_load_ptr_relaxed(&bucket->value);
+            return _Py_mro_cache_make_result(&bucket->value);
         }
     }
 
@@ -78,10 +98,12 @@ _Py_mro_cache_lookup(_Py_mro_cache *cache, PyObject *name)
     while (1) {
         entry_name = _Py_atomic_load_ptr_relaxed(&bucket->name);
         if (entry_name == name) {
-            return _Py_atomic_load_ptr_relaxed(&bucket->value);
+            return _Py_mro_cache_make_result(&bucket->value);
         }
         if (entry_name == NULL || bucket == first) {
-            return NULL;
+            result.hit = 0;
+            result.value = NULL;
+            return result;
         }
         bucket--;
     }
