@@ -318,6 +318,7 @@ _PyCode_Quicken(PyCodeObject *code)
 #define SPEC_FAIL_WRONG_NUMBER_ARGUMENTS 6
 #define SPEC_FAIL_CODE_COMPLEX_PARAMETERS 7
 #define SPEC_FAIL_CODE_NOT_OPTIMIZED 8
+#define SPEC_FAIL_NOT_CACHED 34
 
 
 #define SPEC_FAIL_LOAD_GLOBAL_NON_DICT 17
@@ -523,7 +524,8 @@ typedef enum {
     ABSENT, /* Attribute is not present on the class */
     DUNDER_CLASS, /* __class__ attribute */
     GETSET_OVERRIDDEN, /* __getattribute__ or __setattr__ has been overridden */
-    GETATTRIBUTE_IS_PYTHON_FUNCTION  /* Descriptor requires calling a Python __getattribute__ */
+    GETATTRIBUTE_IS_PYTHON_FUNCTION,  /* Descriptor requires calling a Python __getattribute__ */
+    NOT_CACHED, /* Attribute is not cached */
 } DescriptorClassification;
 
 
@@ -547,15 +549,19 @@ analyze_descriptor(PyTypeObject *type, PyObject *name, PyObject **descr, int sto
             getattro_slot == _Py_slot_tp_getattro) {
             /* One or both of __getattribute__ or __getattr__ may have been
              overridden See typeobject.c for why these functions are special. */
-            PyObject *getattribute = _PyType_Lookup(type,
-                &_Py_ID(__getattribute__));
+            _Py_mro_cache_result r = _Py_mro_cache_lookup(&type->tp_mro_cache,
+                                                          &_Py_ID(__getattribute__));
+            if (!r.hit) {
+                *descr = NULL;
+                return NOT_CACHED;
+            }
+            PyObject *getattribute = r.value;
             PyInterpreterState *interp = _PyInterpreterState_GET();
             bool has_custom_getattribute = getattribute != NULL &&
                 getattribute != interp->callable_cache.object__getattribute__;
-            has_getattr = _PyType_Lookup(type, &_Py_ID(__getattr__)) != NULL;
             if (has_custom_getattribute) {
+                /* getattro_slot == _Py_slot_tp_getattro implies no __getattr__ */
                 if (getattro_slot == _Py_slot_tp_getattro &&
-                    !has_getattr &&
                     Py_IS_TYPE(getattribute, &PyFunction_Type)) {
                     *descr = getattribute;
                     return GETATTRIBUTE_IS_PYTHON_FUNCTION;
@@ -564,6 +570,14 @@ analyze_descriptor(PyTypeObject *type, PyObject *name, PyObject **descr, int sto
                    Too complicated */
                 *descr = NULL;
                 return GETSET_OVERRIDDEN;
+            }
+            if (getattro_slot == _Py_slot_tp_getattro) {
+                r = _Py_mro_cache_lookup(&type->tp_mro_cache, &_Py_ID(__getattr__));
+                if (!r.hit) {
+                    *descr = NULL;
+                    return NOT_CACHED;
+                }
+                has_getattr = r.value != NULL;
             }
             /* Potentially has __getattr__ but no custom __getattribute__.
                Fall through to usual descriptor analysis.
@@ -578,8 +592,12 @@ analyze_descriptor(PyTypeObject *type, PyObject *name, PyObject **descr, int sto
             return GETSET_OVERRIDDEN;
         }
     }
-    PyObject *descriptor = _PyType_LookupCache(type, name);
+    _Py_mro_cache_result r = _Py_mro_cache_lookup(&type->tp_mro_cache, name);
+    PyObject *descriptor = r.value;
     *descr = descriptor;
+    if (!r.hit) {
+        return NOT_CACHED;
+    }
     if (descriptor == NULL) {
         return ABSENT;
     }
@@ -602,8 +620,9 @@ analyze_descriptor(PyTypeObject *type, PyObject *name, PyObject **descr, int sto
                __getattr__. */
             return has_getattr ? GETSET_OVERRIDDEN : PROPERTY;
         }
-        if (PyUnicode_CompareWithASCIIString(name, "__class__") == 0) {
-            if (descriptor == _PyType_LookupCache(&PyBaseObject_Type, name)) {
+        if (name == &_Py_ID(__class__)) {
+            PyInterpreterState *interp = _PyInterpreterState_GET();
+            if (descriptor == interp->callable_cache.object__class__) {
                 return DUNDER_CLASS;
             }
         }
@@ -726,7 +745,7 @@ _Py_Specialize_LoadAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
     }
     PyObject *descr = NULL;
     DescriptorClassification kind = analyze_descriptor(type, name, &descr, 0);
-    assert(descr != NULL || kind == ABSENT || kind == GETSET_OVERRIDDEN);
+    assert(descr != NULL || kind == ABSENT || kind == GETSET_OVERRIDDEN || kind == NOT_CACHED);
     switch(kind) {
         case OVERRIDING:
             SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_ATTR_OVERRIDING_DESCRIPTOR);
@@ -813,6 +832,9 @@ _Py_Specialize_LoadAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
             goto fail;
         case GETSET_OVERRIDDEN:
             SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_OVERRIDDEN);
+            goto fail;
+        case NOT_CACHED:
+            SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_NOT_CACHED);
             goto fail;
         case GETATTRIBUTE_IS_PYTHON_FUNCTION:
         {
@@ -946,6 +968,9 @@ _Py_Specialize_StoreAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
         case GETSET_OVERRIDDEN:
             SPECIALIZATION_FAIL(STORE_ATTR, SPEC_FAIL_OVERRIDDEN);
             goto fail;
+        case NOT_CACHED:
+            SPECIALIZATION_FAIL(STORE_ATTR, SPEC_FAIL_NOT_CACHED);
+            goto fail;
         case BUILTIN_CLASSMETHOD:
             SPECIALIZATION_FAIL(STORE_ATTR, SPEC_FAIL_ATTR_BUILTIN_CLASS_METHOD_OBJ);
             goto fail;
@@ -1020,7 +1045,16 @@ specialize_class_load_attr(PyObject *owner, _Py_CODEUNIT *instr,
                              PyObject *name)
 {
     _PyLoadMethodCache *cache = (_PyLoadMethodCache *)(instr + 1);
-    if (!PyType_CheckExact(owner) || _PyType_LookupCache(Py_TYPE(owner), name)) {
+    if (!PyType_CheckExact(owner)) {
+        SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_ATTR_METACLASS_ATTRIBUTE);
+        return -1;
+    }
+    _Py_mro_cache_result r = _Py_mro_cache_lookup(&Py_TYPE(owner)->tp_mro_cache, name);
+    if (!r.hit) {
+        SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_NOT_CACHED);
+        return -1;
+    }
+    if (r.value != NULL) {
         SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_ATTR_METACLASS_ATTRIBUTE);
         return -1;
     }
@@ -1379,7 +1413,12 @@ _Py_Specialize_BinarySubscr(
         goto success;
     }
     PyTypeObject *cls = Py_TYPE(container);
-    PyObject *descriptor = _PyType_LookupCache(cls, &_Py_ID(__getitem__));
+    _Py_mro_cache_result r = _Py_mro_cache_lookup(&cls->tp_mro_cache, &_Py_ID(__getitem__));
+    if (!r.hit) {
+        SPECIALIZATION_FAIL(BINARY_SUBSCR, SPEC_FAIL_NOT_CACHED);
+        goto fail;
+    }
+    PyObject *descriptor = r.value;
     if (descriptor && Py_TYPE(descriptor) == &PyFunction_Type) {
         if (!(container_type->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
             SPECIALIZATION_FAIL(BINARY_SUBSCR, SPEC_FAIL_SUBSCR_NOT_HEAP_TYPE);
@@ -1508,7 +1547,13 @@ _Py_Specialize_StoreSubscr(PyObject *container, PyObject *sub, _Py_CODEUNIT *ins
         }
         goto fail;
     }
-    PyObject *descriptor = _PyType_LookupCache(container_type, &_Py_ID(__setitem__));
+    _Py_mro_cache_result r;
+    r = _Py_mro_cache_lookup(&container_type->tp_mro_cache, &_Py_ID(__setitem__));
+    if (!r.hit) {
+        SPECIALIZATION_FAIL(STORE_SUBSCR, SPEC_FAIL_NOT_CACHED);
+        goto fail;
+    }
+    PyObject *descriptor = r.value;
     if (descriptor && Py_TYPE(descriptor) == &PyFunction_Type) {
         PyFunctionObject *func = (PyFunctionObject *)descriptor;
         PyCodeObject *code = (PyCodeObject *)func->func_code;

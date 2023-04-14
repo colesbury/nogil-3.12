@@ -31,6 +31,11 @@ struct _mro_cache_state {
     Py_ssize_t empty_buckets_capacity;
 };
 
+typedef struct _Py_mro_cache_result {
+    int hit;
+    PyObject *value;
+} _Py_mro_cache_result;
+
 extern PyStatus _Py_mro_cache_init(PyInterpreterState *interp);
 extern void _Py_mro_cache_fini(PyInterpreterState *interp);
 extern void _Py_mro_cache_init_type(PyTypeObject *type);
@@ -41,29 +46,20 @@ extern void _Py_mro_cache_erase(_Py_mro_cache *cache);
 extern void _Py_mro_cache_insert(_Py_mro_cache *cache, PyObject *name, PyObject *value);
 
 extern PyObject *_Py_mro_cache_as_dict(_Py_mro_cache *cache);
-extern PyObject _Py_NotFoundStruct;
-
-typedef struct _Py_mro_cache_result {
-    int hit;
-    PyObject *value;
-} _Py_mro_cache_result;
 
 static inline _Py_mro_cache_result
 _Py_mro_cache_make_result(uintptr_t *ptr)
 {
     uintptr_t value = _Py_atomic_load_uintptr_relaxed(ptr);
-    _Py_mro_cache_result result = {
+    return (_Py_mro_cache_result) {
         .hit = value != 0,
         .value = (PyObject *)(value & ~1),
     };
-    return result;
 }
 
 static inline struct _Py_mro_cache_result
 _Py_mro_cache_lookup(_Py_mro_cache *cache, PyObject *name)
 {
-    struct _Py_mro_cache_result result;
-
     Py_hash_t hash = ((PyASCIIObject *)name)->hash;
     uint32_t mask = _Py_atomic_load_uint32(&cache->mask);
     _Py_mro_cache_entry *first = _Py_atomic_load_ptr_relaxed(&cache->buckets);
@@ -79,9 +75,7 @@ _Py_mro_cache_lookup(_Py_mro_cache *cache, PyObject *name)
     /* First loop */
     while (1) {
         if (entry_name == NULL) {
-            result.hit = 0;
-            result.value = NULL;
-            return result;
+            return (_Py_mro_cache_result){0, NULL};
         }
         if (bucket == first) {
             break;
@@ -101,9 +95,7 @@ _Py_mro_cache_lookup(_Py_mro_cache *cache, PyObject *name)
             return _Py_mro_cache_make_result(&bucket->value);
         }
         if (entry_name == NULL || bucket == first) {
-            result.hit = 0;
-            result.value = NULL;
-            return result;
+            return (_Py_mro_cache_result){0, NULL};
         }
         bucket--;
     }
