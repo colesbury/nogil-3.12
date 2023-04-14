@@ -1766,6 +1766,8 @@ _PyThread_CurrentFrames(void)
      * need to grab head_mutex for the duration.
      */
     _PyRuntimeState *runtime = tstate->interp->runtime;
+    _PyMutex_lock(&_PyRuntime.stoptheworld_mutex);
+    _PyRuntimeState_StopTheWorld(&_PyRuntime);
     HEAD_LOCK(runtime);
     PyInterpreterState *i;
     for (i = runtime->interpreters.head; i != NULL; i = i->next) {
@@ -1799,6 +1801,8 @@ fail:
 
 done:
     HEAD_UNLOCK(runtime);
+    _PyRuntimeState_StartTheWorld(&_PyRuntime);
+    _PyMutex_unlock(&_PyRuntime.stoptheworld_mutex);
     return result;
 }
 
@@ -1825,6 +1829,8 @@ _PyThread_CurrentExceptions(void)
      * need to grab head_mutex for the duration.
      */
     _PyRuntimeState *runtime = tstate->interp->runtime;
+    _PyMutex_lock(&_PyRuntime.stoptheworld_mutex);
+    _PyRuntimeState_StopTheWorld(&_PyRuntime);
     HEAD_LOCK(runtime);
     PyInterpreterState *i;
     for (i = runtime->interpreters.head; i != NULL; i = i->next) {
@@ -1858,6 +1864,8 @@ fail:
 
 done:
     HEAD_UNLOCK(runtime);
+    _PyRuntimeState_StartTheWorld(&_PyRuntime);
+    _PyMutex_unlock(&_PyRuntime.stoptheworld_mutex);
     return result;
 }
 
