@@ -955,11 +955,17 @@ GETITEM(PyObject *v, Py_ssize_t i) {
 #define ADAPTIVE_COUNTER_IS_MAX(COUNTER) \
     (((COUNTER) >> ADAPTIVE_BACKOFF_BITS) == ((1 << MAX_BACKOFF_VALUE) - 1))
 
-#define DECREMENT_ADAPTIVE_COUNTER(COUNTER)           \
-    do {                                              \
-        assert(!ADAPTIVE_COUNTER_IS_ZERO((COUNTER))); \
-        (COUNTER) -= (1 << ADAPTIVE_BACKOFF_BITS);    \
-    } while (0);
+static _Py_ALWAYS_INLINE int
+DECREMENT_ADAPTIVE_COUNTER(uint16_t *ptr)
+{
+    uint16_t counter = _Py_atomic_load_uint16_relaxed(ptr);
+    if (ADAPTIVE_COUNTER_IS_ZERO(counter)) {
+        return 1;
+    }
+    counter -= (1 << ADAPTIVE_BACKOFF_BITS);
+    _Py_atomic_store_uint16_relaxed(ptr, counter);
+    return 0;
+}
 
 #define INCREMENT_ADAPTIVE_COUNTER(COUNTER)          \
     do {                                             \
