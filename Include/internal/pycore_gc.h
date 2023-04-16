@@ -40,6 +40,8 @@ typedef struct {
 #define _PyGC_PREV_SHIFT            (3)
 #define _PyGC_PREV_MASK             (((uintptr_t) -1) << _PyGC_PREV_SHIFT)
 
+#define _PyGC_MARKED (1)
+
 static inline PyGC_Head* _Py_AS_GC(PyObject *op) {
     char *mem = _Py_STATIC_CAST(char*, op);
     return _Py_STATIC_CAST(PyGC_Head*, mem + PyGC_Head_OFFSET);
@@ -165,6 +167,8 @@ struct gc_generation_stats {
     Py_ssize_t uncollectable;
 };
 
+typedef struct _PyObjectQueue _PyObjectQueue;
+
 struct _gc_runtime_state {
     /* List of objects that still need to be cleaned up, singly linked
      * via their gc headers' gc_prev pointers.  */
@@ -203,6 +207,8 @@ struct _gc_runtime_state {
        collections, and are awaiting to undergo a full collection for
        the first time. */
     Py_ssize_t long_lived_pending;
+
+    _PyObjectQueue *gc_work;
 };
 
 

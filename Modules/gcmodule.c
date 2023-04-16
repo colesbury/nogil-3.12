@@ -708,7 +708,7 @@ merge_refcount(PyObject *op, Py_ssize_t extra)
 }
 
 struct update_refs_args {
-    PyGC_Head *list;
+    GCState *gcstate;
     int split_keys_marked;
     _PyGC_Reason gc_reason;
 };
@@ -737,7 +737,6 @@ update_refs(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size
     if (!_PyGC_TRACKED(gc)) {
         return true;
     }
-    PyGC_Head *list = arg->list;
 
     assert(_PyGC_TRACKED(gc));
 
@@ -769,17 +768,25 @@ update_refs(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size
     Py_ssize_t refcount = _Py_GC_REFCNT(op);
     _PyObject_ASSERT(op, refcount >= 0);
     gc_add_refs(gc, refcount);
+    op->ob_gc_bits = 0;
 
     // Subtract internal references from gc_refs. Objects with gc_refs > 0
     // are directly reachable from outside containers, and so can't be
     // collected.
     Py_TYPE(op)->tp_traverse(op, visit_decref, NULL);
-
-    PyGC_Head *prev = (PyGC_Head *)list->_gc_prev;
-    prev->_gc_next = (uintptr_t)gc;
-    gc->_gc_next = (uintptr_t)list;
-    list->_gc_prev = (uintptr_t)gc;
     return true;
+}
+
+static void
+update_refs_outer(GCState *gcstate, _PyGC_Reason reason, Py_ssize_t *split_keys_marked)
+{
+    struct update_refs_args args = {
+        .gcstate = gcstate,
+        .split_keys_marked = 0,
+        .gc_reason = reason,
+    };
+    visit_heaps2(mi_heap_tag_gc, update_refs, &args);
+    *split_keys_marked = args.split_keys_marked;
 }
 
 /* A traversal callback for subtract_refs. */
@@ -1477,6 +1484,94 @@ deduce_unreachable(PyGC_Head *base, PyGC_Head *unreachable) {
     validate_list(unreachable, unreachable_set);
 }
 
+static int
+visit_reachable_heap(PyObject *op, GCState *gcstate)
+{
+    if (_PyObject_IS_GC(op) && _PyObject_GC_IS_TRACKED(op)) {
+        if (!(op->ob_gc_bits & _PyGC_MARKED)) {
+            op->ob_gc_bits += _PyGC_MARKED;
+            PyGC_Head *gc = AS_GC(op);
+            gc->_gc_prev &= ~_PyGC_PREV_MASK;
+            _PyObjectQueue_Push(&gcstate->gc_work, op);
+        }
+    }
+   return 0;
+}
+
+static bool
+mark_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* args)
+{
+    PyGC_Head *gc = (PyGC_Head *)block;
+    if (!gc) return true;
+
+    GCState *gcstate = (GCState *)args;
+
+    if (!_PyGC_TRACKED(gc)) {
+        return true;
+    }
+
+    if (!gc_get_refs(gc)) {
+        return true;
+    }
+
+    PyObject *op = FROM_GC(gc);
+    if ((op->ob_gc_bits & _PyGC_MARKED)) {
+        return true;
+    }
+
+    /* gc is definitely reachable from outside the
+        * original 'young'.  Mark it as such, and traverse
+        * its pointers to find any other objects that may
+        * be directly reachable from it.  Note that the
+        * call to tp_traverse may append objects to young,
+        * so we have to wait until it returns to determine
+        * the next object to visit.
+        */
+    _PyObject_ASSERT_WITH_MSG(op, gc_get_refs(gc) > 0,
+                                    "refcount is too small");
+    op->ob_gc_bits += _PyGC_MARKED;
+    gc->_gc_prev &= ~_PyGC_PREV_MASK;
+    do {
+        traverseproc traverse = Py_TYPE(op)->tp_traverse;
+        (void) traverse(op,
+                (visitproc)visit_reachable_heap,
+                gcstate);
+        op = _PyObjectQueue_Pop(&gcstate->gc_work);
+    } while (op != NULL);
+    return true;
+}
+
+static bool
+scan_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* args)
+{
+    PyGC_Head *gc = (PyGC_Head *)block;
+    if (!gc) return true;
+
+    PyGC_Head *unreachable = (PyGC_Head *)args;
+    PyObject *op = FROM_GC(gc);
+
+    if (!_PyGC_TRACKED(gc)) {
+        return true;
+    }
+
+    if ((op->ob_gc_bits & _PyGC_MARKED)) {
+        op->ob_gc_bits -= _PyGC_MARKED;
+        return true;
+    }
+
+    gc_list_append(gc, unreachable);
+    gc_set_unreachable(gc);
+    return true;
+}
+
+static inline void
+deduce_unreachable_heap(GCState *gcstate, PyGC_Head *unreachable) {
+    visit_heaps2(mi_heap_tag_gc, mark_heap_visitor, gcstate);
+    gc_list_init(unreachable);
+    visit_heaps2(mi_heap_tag_gc, scan_heap_visitor, unreachable);
+    validate_list(unreachable, unreachable_set);
+}
+
 /* Handle objects that may have resurrected after a call to 'finalize_garbage', moving
    them to 'old_generation' and placing the rest on 'still_unreachable'.
 
@@ -1612,21 +1707,18 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     merge_queued_objects(&to_dealloc);
     validate_tracked_heap(_PyGC_PREV_MASK|_PyGC_PREV_MASK_UNREACHABLE, 0);
 
-    gc_list_init(&young);
-    struct update_refs_args args = {
-        .list = &young,
-        .split_keys_marked = 0,
-        .gc_reason = reason,
-    };
-    visit_heaps2(mi_heap_tag_gc, update_refs, &args);
+    Py_ssize_t split_keys_marked = 0;
+    update_refs_outer(gcstate, reason, &split_keys_marked);
 
     _PyObjectQueue *dead_keys = NULL;
     int split_keys_unmarked = 0;
     find_dead_shared_keys(&dead_keys, &split_keys_unmarked);
     free_dict_keys(&dead_keys);
-    assert(args.split_keys_marked == split_keys_unmarked);
-    deduce_unreachable(&young, &unreachable);
+    assert(split_keys_marked == split_keys_unmarked);
 
+    deduce_unreachable_heap(gcstate, &unreachable);
+
+    gc_list_init(&young);
     gcstate->long_lived_pending = 0;
     gcstate->long_lived_total = gc_list_size(&young);
     gc_list_clear(&young);
