@@ -887,7 +887,7 @@ GETITEM(PyObject *v, Py_ssize_t i) {
         /* This is only a single jump on release builds! */ \
         UPDATE_MISS_STATS((INSTNAME));                      \
         assert(_PyOpcode_Deopt[opcode] == (INSTNAME));      \
-        GO_TO_INSTRUCTION(INSTNAME ## _GENERIC);            \
+        goto INSTNAME ## _DEOPT;                            \
     }
 
 #define DEOPT_UNLOCK_IF(COND, INSTNAME)                     \
@@ -896,7 +896,7 @@ GETITEM(PyObject *v, Py_ssize_t i) {
         UPDATE_MISS_STATS((INSTNAME));                      \
         assert(_PyOpcode_Deopt[opcode] == (INSTNAME));      \
         _Py_critical_section_end(&_cs);                     \
-        GO_TO_INSTRUCTION(INSTNAME ## _GENERIC);            \
+        goto INSTNAME ## _DEOPT;                            \
     }
 
 
@@ -1333,6 +1333,57 @@ handle_eval_breaker:
         /* This should never be reached. Every opcode should end with DISPATCH()
            or goto error. */
         Py_UNREACHABLE();
+
+BINARY_OP_DEOPT:
+    if (!_PyRuntime.preconfig.disable_gil) {
+        GO_TO_INSTRUCTION(BINARY_OP);
+    }
+    GO_TO_INSTRUCTION(BINARY_OP_GENERIC);
+BINARY_SUBSCR_DEOPT:
+    if (!_PyRuntime.preconfig.disable_gil) {
+        GO_TO_INSTRUCTION(BINARY_SUBSCR);
+    }
+    GO_TO_INSTRUCTION(BINARY_SUBSCR_GENERIC);
+CALL_DEOPT:
+    if (!_PyRuntime.preconfig.disable_gil) {
+        GO_TO_INSTRUCTION(CALL);
+    }
+    GO_TO_INSTRUCTION(CALL_GENERIC);
+COMPARE_OP_DEOPT:
+    if (!_PyRuntime.preconfig.disable_gil) {
+        GO_TO_INSTRUCTION(COMPARE_OP);
+    }
+    GO_TO_INSTRUCTION(COMPARE_OP_GENERIC);
+FOR_ITER_DEOPT:
+    if (!_PyRuntime.preconfig.disable_gil) {
+        GO_TO_INSTRUCTION(FOR_ITER);
+    }
+    GO_TO_INSTRUCTION(FOR_ITER_GENERIC);
+LOAD_ATTR_DEOPT:
+    if (!_PyRuntime.preconfig.disable_gil) {
+        GO_TO_INSTRUCTION(LOAD_ATTR);
+    }
+    GO_TO_INSTRUCTION(LOAD_ATTR_GENERIC);
+LOAD_GLOBAL_DEOPT:
+    if (!_PyRuntime.preconfig.disable_gil) {
+        GO_TO_INSTRUCTION(LOAD_GLOBAL);
+    }
+    GO_TO_INSTRUCTION(LOAD_GLOBAL_GENERIC);
+STORE_ATTR_DEOPT:
+    if (!_PyRuntime.preconfig.disable_gil) {
+        GO_TO_INSTRUCTION(STORE_ATTR);
+    }
+    GO_TO_INSTRUCTION(STORE_ATTR_GENERIC);
+STORE_SUBSCR_DEOPT:
+    if (!_PyRuntime.preconfig.disable_gil) {
+        GO_TO_INSTRUCTION(STORE_SUBSCR);
+    }
+    GO_TO_INSTRUCTION(STORE_SUBSCR_GENERIC);
+UNPACK_SEQUENCE_DEOPT:
+    if (!_PyRuntime.preconfig.disable_gil) {
+        GO_TO_INSTRUCTION(UNPACK_SEQUENCE);
+    }
+    GO_TO_INSTRUCTION(UNPACK_SEQUENCE_GENERIC);
 
 unbound_local_error:
         {

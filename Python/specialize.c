@@ -712,7 +712,7 @@ static int specialize_class_load_attr(PyObject* owner, _Py_CODEUNIT* instr, PyOb
 void
 _Py_Specialize_LoadAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
 {
-    if (instr->opcode != LOAD_ATTR) {
+    if (_PyRuntime.preconfig.disable_gil && instr->opcode != LOAD_ATTR) {
         // another thread concurrently specialized this instruction
         STAT_INC(LOAD_ATTR, failure);
         return;
@@ -896,7 +896,7 @@ success:
 void
 _Py_Specialize_StoreAttr(PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
 {
-    if (instr->opcode != STORE_ATTR) {
+    if (_PyRuntime.preconfig.disable_gil && instr->opcode != STORE_ATTR) {
         // another thread concurrently specialized this instruction
         STAT_INC(STORE_ATTR, failure);
         return;
@@ -1191,7 +1191,7 @@ _Py_Specialize_LoadGlobal(
     PyObject *globals, PyObject *builtins,
     _Py_CODEUNIT *instr, PyObject *name)
 {
-    if (instr->opcode != LOAD_GLOBAL) {
+    if (_PyRuntime.preconfig.disable_gil && instr->opcode != LOAD_GLOBAL) {
         // another thread concurrently specialized this instruction
         STAT_INC(LOAD_GLOBAL, failure);
         return;
@@ -1367,7 +1367,7 @@ void
 _Py_Specialize_BinarySubscr(
      PyObject *container, PyObject *sub, _Py_CODEUNIT *instr)
 {
-    if (instr->opcode != BINARY_SUBSCR) {
+    if (_PyRuntime.preconfig.disable_gil && instr->opcode != BINARY_SUBSCR) {
         // another thread concurrently specialized this instruction
         STAT_INC(BINARY_SUBSCR, failure);
         return;
@@ -1459,7 +1459,7 @@ success:
 void
 _Py_Specialize_StoreSubscr(PyObject *container, PyObject *sub, _Py_CODEUNIT *instr)
 {
-    if (instr->opcode != STORE_SUBSCR) {
+    if (_PyRuntime.preconfig.disable_gil && instr->opcode != STORE_SUBSCR) {
         // another thread concurrently specialized this instruction
         STAT_INC(STORE_SUBSCR, failure);
         return;
@@ -1849,7 +1849,7 @@ void
 _Py_Specialize_Call(PyObject *callable, _Py_CODEUNIT *instr, int nargs,
                     PyObject *kwnames)
 {
-    if (instr->opcode != CALL) {
+    if (_PyRuntime.preconfig.disable_gil && instr->opcode != CALL) {
         // another thread concurrently specialized this instruction
         STAT_INC(CALL, failure);
         return;
@@ -1972,7 +1972,7 @@ void
 _Py_Specialize_BinaryOp(PyObject *lhs, PyObject *rhs, _Py_CODEUNIT *instr,
                         int oparg, PyObject **locals)
 {
-    if (instr->opcode != BINARY_OP) {
+    if (_PyRuntime.preconfig.disable_gil && instr->opcode != BINARY_OP) {
         // another thread concurrently specialized this instruction
         STAT_INC(BINARY_OP, failure);
         return;
@@ -2098,7 +2098,7 @@ void
 _Py_Specialize_CompareOp(PyObject *lhs, PyObject *rhs, _Py_CODEUNIT *instr,
                          int oparg)
 {
-    if (instr->opcode != COMPARE_OP) {
+    if (_PyRuntime.preconfig.disable_gil && instr->opcode != COMPARE_OP) {
         // another thread concurrently specialized this instruction
         STAT_INC(COMPARE_OP, failure);
         return;
@@ -2178,7 +2178,7 @@ unpack_sequence_fail_kind(PyObject *seq)
 void
 _Py_Specialize_UnpackSequence(PyObject *seq, _Py_CODEUNIT *instr, int oparg)
 {
-    if (instr->opcode != UNPACK_SEQUENCE) {
+    if (_PyRuntime.preconfig.disable_gil && instr->opcode != UNPACK_SEQUENCE) {
         // another thread concurrently specialized this instruction
         STAT_INC(UNPACK_SEQUENCE, failure);
         return;
@@ -2292,7 +2292,7 @@ int
 void
 _Py_Specialize_ForIter(PyObject *iter, _Py_CODEUNIT *instr, int oparg)
 {
-    if (instr->opcode != FOR_ITER) {
+    if (_PyRuntime.preconfig.disable_gil && instr->opcode != FOR_ITER) {
         // another thread concurrently specialized this instruction
         STAT_INC(FOR_ITER, failure);
         return;
