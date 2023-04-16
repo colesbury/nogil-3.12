@@ -42,7 +42,7 @@ typedef struct {
 
 #define _PyGC_MARKED (1)
 #define _PyGC_UNREACHABLE (2)
-#define _PyGC_FINALIZER (2)
+#define _PyGC_LEGACY_FINALIZER (4)
 
 static inline PyGC_Head* _Py_AS_GC(PyObject *op) {
     char *mem = _Py_STATIC_CAST(char*, op);
