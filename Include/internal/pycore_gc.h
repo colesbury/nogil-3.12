@@ -41,6 +41,8 @@ typedef struct {
 #define _PyGC_PREV_MASK             (((uintptr_t) -1) << _PyGC_PREV_SHIFT)
 
 #define _PyGC_MARKED (1)
+#define _PyGC_UNREACHABLE (2)
+#define _PyGC_FINALIZER (2)
 
 static inline PyGC_Head* _Py_AS_GC(PyObject *op) {
     char *mem = _Py_STATIC_CAST(char*, op);
@@ -207,6 +209,9 @@ struct _gc_runtime_state {
        collections, and are awaiting to undergo a full collection for
        the first time. */
     Py_ssize_t long_lived_pending;
+
+    Py_ssize_t gc_collected;
+    Py_ssize_t gc_uncollectable;
 
     _PyObjectQueue *gc_work;
     _PyObjectQueue *gc_finalizers;

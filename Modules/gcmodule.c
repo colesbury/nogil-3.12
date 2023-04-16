@@ -977,32 +977,6 @@ has_legacy_finalizer(PyObject *op)
     return Py_TYPE(op)->tp_del != NULL;
 }
 
-/* Move the objects in unreachable with tp_del slots into `finalizers`.
- *
- * This function also removes NEXT_MASK_UNREACHABLE flag
- * from _gc_next in unreachable.
- */
-static void
-move_legacy_finalizers(PyGC_Head *unreachable, PyGC_Head *finalizers)
-{
-    PyGC_Head *gc, *next;
-
-    /* March over unreachable.  Move objects with finalizers into
-     * `finalizers`.
-     */
-    for (gc = GC_NEXT(unreachable); gc != unreachable; gc = next) {
-        PyObject *op = FROM_GC(gc);
-
-        _PyObject_ASSERT(op, gc_is_unreachable(gc));
-        next = (PyGC_Head*)gc->_gc_next;
-
-        if (has_legacy_finalizer(op)) {
-            gc_list_move(gc, finalizers);
-            gc->_gc_prev &= ~_PyGC_PREV_MASK_UNREACHABLE;
-        }
-    }
-}
-
 static inline void
 clear_unreachable_mask(PyGC_Head *unreachable)
 {
@@ -1013,37 +987,6 @@ clear_unreachable_mask(PyGC_Head *unreachable)
         next = (PyGC_Head*)gc->_gc_next;
     }
     // validate_list(unreachable, unreachable_clear);
-}
-
-/* A traversal callback for move_legacy_finalizer_reachable. */
-static int
-visit_move(PyObject *op, PyGC_Head *tolist)
-{
-    if (_PyObject_IS_GC(op)) {
-        PyGC_Head *gc = AS_GC(op);
-        if (gc_is_unreachable(gc)) {
-            gc_list_move(gc, tolist);
-            gc->_gc_prev &= ~_PyGC_PREV_MASK_UNREACHABLE;
-        }
-    }
-    return 0;
-}
-
-/* Move objects that are reachable from finalizers, from the unreachable set
- * into finalizers set.
- */
-static void
-move_legacy_finalizer_reachable(PyGC_Head *finalizers)
-{
-    traverseproc traverse;
-    PyGC_Head *gc = GC_NEXT(finalizers);
-    for (; gc != finalizers; gc = GC_NEXT(gc)) {
-        /* Note that the finalizers list may grow during this. */
-        traverse = Py_TYPE(FROM_GC(gc))->tp_traverse;
-        (void) traverse(FROM_GC(gc),
-                        (visitproc)visit_move,
-                        (void *)finalizers);
-    }
 }
 
 /* Adds one to the refcount and merges the local and shared fields. */
@@ -1194,12 +1137,11 @@ clear_weakrefs(PyGC_Head *unreachable, PyGC_Head *wrcb_to_call)
     }
 }
 
-static int
+static void
 call_weakref_callbacks(PyGC_Head *wrcb_to_call)
 {
     PyGC_Head *gc;
     PyObject *op;               /* generally FROM_GC(gc) */
-    int num_freed = 0;
 
     /* Invoke the callbacks we decided to honor.  It's safe to invoke them
      * because they can't reference unreachable objects.
@@ -1236,8 +1178,6 @@ call_weakref_callbacks(PyGC_Head *wrcb_to_call)
          */
         Py_DECREF(op);
     }
-
-    return num_freed;
 }
 
 static void
@@ -1569,10 +1509,42 @@ scan_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
     }
     else {
         // unreachable normal object
+        op->ob_gc_bits += _PyGC_UNREACHABLE;
         gc_list_append(gc, arg->unreachable);
         gc_set_unreachable(gc);
     }
     return true;
+}
+
+/* A traversal callback for move_legacy_finalizer_reachable. */
+static int
+visit_move(PyObject *op, PyGC_Head *tolist)
+{
+    if (_PyObject_IS_GC(op)) {
+        PyGC_Head *gc = AS_GC(op);
+        if (gc_is_unreachable(gc)) {
+            gc_list_move(gc, tolist);
+            gc->_gc_prev &= ~_PyGC_PREV_MASK_UNREACHABLE;
+        }
+    }
+    return 0;
+}
+
+/* Move objects that are reachable from finalizers, from the unreachable set
+ * into finalizers set.
+ */
+static void
+move_legacy_finalizer_reachable(PyGC_Head *finalizers)
+{
+    traverseproc traverse;
+    PyGC_Head *gc = GC_NEXT(finalizers);
+    for (; gc != finalizers; gc = GC_NEXT(gc)) {
+        /* Note that the finalizers list may grow during this. */
+        traverse = Py_TYPE(FROM_GC(gc))->tp_traverse;
+        (void) traverse(FROM_GC(gc),
+                        (visitproc)visit_move,
+                        (void *)finalizers);
+    }
 }
 
 static inline void
@@ -1608,6 +1580,21 @@ deduce_unreachable_heap(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head *fin
     clear_weakrefs(unreachable, wrcb_to_call);
 
     validate_list(unreachable, unreachable_set);
+
+    /* Collect statistics on uncollectable objects found and print
+     * debugging information. */
+    for (PyGC_Head *gc = GC_NEXT(finalizers); gc != finalizers; gc = GC_NEXT(gc)) {
+        gcstate->gc_uncollectable++;
+        if (gcstate->debug & DEBUG_UNCOLLECTABLE)
+            debug_cycle("uncollectable", FROM_GC(gc));
+    }
+
+    /* Append instances in the uncollectable set to a Python
+     * reachable list of garbage.  The programmer has to deal with
+     * this if they insist on creating this type of structure.
+     */
+    PyThreadState *tstate = PyThreadState_GET();
+    handle_legacy_finalizers(tstate, gcstate, finalizers);
 }
 
 /* Handle objects that may have resurrected after a call to 'finalize_garbage', moving
@@ -1685,15 +1672,14 @@ invoke_gc_callback(PyThreadState *tstate, const char *phase,
 static Py_ssize_t
 gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
 {
-    Py_ssize_t m = 0; /* # objects collected */
-    Py_ssize_t n = 0; /* # unreachable objects that couldn't be collected */
     PyGC_Head unreachable; /* non-problematic unreachable trash */
     PyGC_Head wrcb_to_call; /* weakrefs with callbacks to call */
     PyGC_Head finalizers;  /* objects with, & reachable from, __del__ */
-    PyGC_Head *gc;
     _PyObjectQueue *to_dealloc = NULL;
     _PyTime_t t1 = 0;   /* initialize to prevent a compiler warning */
     GCState *gcstate = &tstate->interp->gc;
+    gcstate->gc_collected = 0; /* # objects collected */
+    gcstate->gc_uncollectable = 0; /* # unreachable objects that couldn't be collected */
 
     // gc_collect_main() must not be called before _PyGC_Init
     // or after _PyGC_Fini()
@@ -1763,7 +1749,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     /* Dealloc objects with zero refcount that are not tracked by GC */
     dealloc_non_gc(&to_dealloc);
 
-    m += call_weakref_callbacks(&wrcb_to_call);
+    call_weakref_callbacks(&wrcb_to_call);
 
     /* Call tp_finalize on objects which have one. */
     finalize_garbage(tstate, &unreachable);
@@ -1790,7 +1776,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     * the reference cycles to be broken.  It may also cause some objects
     * in finalizers to be freed.
     */
-    m += gc_list_size(&final_unreachable);
+    gcstate->gc_collected += gc_list_size(&final_unreachable);
     delete_garbage(tstate, gcstate, &final_unreachable);
 
     if (reason == GC_REASON_MANUAL) {
@@ -1799,25 +1785,14 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
         clear_freelists(tstate);
     }
 
-    /* Collect statistics on uncollectable objects found and print
-     * debugging information. */
-    for (gc = GC_NEXT(&finalizers); gc != &finalizers; gc = GC_NEXT(gc)) {
-        n++;
-        if (gcstate->debug & DEBUG_UNCOLLECTABLE)
-            debug_cycle("uncollectable", FROM_GC(gc));
-    }
     if (gcstate->debug & DEBUG_STATS) {
         double d = _PyTime_AsSecondsDouble(_PyTime_GetPerfCounter() - t1);
         PySys_WriteStderr(
             "gc: done, %zd unreachable, %zd uncollectable, %.4fs elapsed\n",
-            n+m, n, d);
+            gcstate->gc_collected + gcstate->gc_uncollectable,
+            gcstate->gc_uncollectable,
+            d);
     }
-
-    /* Append instances in the uncollectable set to a Python
-     * reachable list of garbage.  The programmer has to deal with
-     * this if they insist on creating this type of structure.
-     */
-    handle_legacy_finalizers(tstate, gcstate, &finalizers);
 
     _Py_qsbr_advance(&_PyRuntime.qsbr_shared);
     _Py_qsbr_quiescent_state(tstate);
@@ -1835,24 +1810,25 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     /* Update stats */
     struct gc_generation_stats *stats = &gcstate->stats;
     stats->collections++;
-    stats->collected += m;
-    stats->uncollectable += n;
+    stats->collected += gcstate->gc_collected;
+    stats->uncollectable += gcstate->gc_uncollectable;
+    Py_ssize_t num_unreachable = gcstate->gc_collected + gcstate->gc_uncollectable;
 
     update_gc_threshold(gcstate);
 
     if (PyDTrace_GC_DONE_ENABLED()) {
-        PyDTrace_GC_DONE(n + m);
+        PyDTrace_GC_DONE(num_unreachable);
     }
 
     assert(!_PyErr_Occurred(tstate));
 
     if (reason != GC_REASON_SHUTDOWN) {
-        invoke_gc_callback(tstate, "stop", m, n);
+        invoke_gc_callback(tstate, "stop", gcstate->gc_collected, gcstate->gc_uncollectable);
     }
 
     _Py_atomic_store_int(&gcstate->collecting, 0);
     _Py_atomic_store_int(&_PyRuntime.gc_collecting, 0);
-    return n + m;
+    return num_unreachable;
 }
 
 /* Invoke progress callbacks to notify clients that garbage collection
