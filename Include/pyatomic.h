@@ -178,6 +178,9 @@ _Py_atomic_load_intptr_relaxed(const volatile intptr_t *address);
 static inline uint8_t
 _Py_atomic_load_uint8_relaxed(const volatile uint8_t *address);
 
+static inline uint16_t
+_Py_atomic_load_uint16_relaxed(const volatile uint16_t *address);
+
 static inline uint32_t
 _Py_atomic_load_uint32_relaxed(const volatile uint32_t *address);
 
@@ -260,6 +263,9 @@ _Py_atomic_store_intptr_relaxed(volatile intptr_t *address, intptr_t value);
 
 static inline void
 _Py_atomic_store_uint8_relaxed(volatile uint8_t* address, uint8_t value);
+
+static inline void
+_Py_atomic_store_uint16_relaxed(volatile uint16_t *address, uint16_t value);
 
 static inline void
 _Py_atomic_store_uint32_relaxed(volatile uint32_t *address, uint32_t value);
