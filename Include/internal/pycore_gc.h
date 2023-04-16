@@ -209,6 +209,8 @@ struct _gc_runtime_state {
     Py_ssize_t long_lived_pending;
 
     _PyObjectQueue *gc_work;
+    _PyObjectQueue *gc_finalizers;
+    _PyObjectQueue *gc_wrcbs;
 };
 
 
