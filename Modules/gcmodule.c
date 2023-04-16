@@ -87,6 +87,12 @@ gc_is_unreachable(PyGC_Head *g)
     return (g->_gc_prev & _PyGC_PREV_MASK_UNREACHABLE) != 0;
 }
 
+static inline int
+gc_is_unreachable2(PyObject *op)
+{
+    return (op->ob_gc_bits & _PyGC_UNREACHABLE) != 0;
+}
+
 static inline Py_ssize_t
 gc_get_refs(PyGC_Head *g)
 {
@@ -768,7 +774,7 @@ update_refs(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size
     Py_ssize_t refcount = _Py_GC_REFCNT(op);
     _PyObject_ASSERT(op, refcount >= 0);
     gc_add_refs(gc, refcount);
-    op->ob_gc_bits = 0;
+    op->ob_gc_bits = _PyGC_UNREACHABLE;
 
     // Subtract internal references from gc_refs. Objects with gc_refs > 0
     // are directly reachable from outside containers, and so can't be
@@ -1020,7 +1026,7 @@ decref_merged(PyObject *op)
  * no object in `unreachable` is weakly referenced anymore.
  */
 static void
-clear_weakrefs(PyGC_Head *unreachable, PyGC_Head *wrcb_to_call)
+clear_weakrefs(GCState *gcstate, PyGC_Head *unreachable)
 {
     PyGC_Head *gc;
     PyObject *op;               /* generally FROM_GC(gc) */
@@ -1072,7 +1078,6 @@ clear_weakrefs(PyGC_Head *unreachable, PyGC_Head *wrcb_to_call)
 
         PyWeakrefBase *ref;
         for (ref = ctrl->wr_next; ref != ctrl; ref = ref->wr_next) {
-            PyGC_Head *wrasgc;                  /* AS_GC(wr) */
             PyWeakReference *wr = (PyWeakReference *)ref;
 
             if (wr->wr_callback == NULL) {
@@ -1118,16 +1123,7 @@ clear_weakrefs(PyGC_Head *unreachable, PyGC_Head *wrcb_to_call)
              * before we can process it again.
              */
             Py_INCREF(wr);
-
-            /* Move wr to wrcb_to_call, for the next pass. */
-            wrasgc = AS_GC(wr);
-            assert(wrasgc != next); /* wrasgc is reachable, but
-                                       next isn't, so they can't
-                                       be the same */
-            assert(_PyGCHead_NEXT(wrasgc) == NULL);
-            assert(_PyGCHead_PREV(wrasgc) == NULL);
-
-            gc_list_append(wrasgc, wrcb_to_call);
+            _PyObjectQueue_Push(&gcstate->gc_wrcb_to_call, (PyObject *)wr);
         }
 
         /* Clear the root weakref but does not invoke any callbacks.
@@ -1138,28 +1134,20 @@ clear_weakrefs(PyGC_Head *unreachable, PyGC_Head *wrcb_to_call)
 }
 
 static void
-call_weakref_callbacks(PyGC_Head *wrcb_to_call)
+call_weakref_callbacks(GCState *gcstate)
 {
-    PyGC_Head *gc;
-    PyObject *op;               /* generally FROM_GC(gc) */
-
     /* Invoke the callbacks we decided to honor.  It's safe to invoke them
      * because they can't reference unreachable objects.
      */
-    while (! gc_list_is_empty(wrcb_to_call)) {
-        PyObject *temp;
-        PyObject *callback;
-
-        gc = (PyGC_Head*)wrcb_to_call->_gc_next;
-        gc_list_remove(gc);
-        op = FROM_GC(gc);
+    PyObject *op;
+    while ((op = _PyObjectQueue_Pop(&gcstate->gc_wrcb_to_call))) {
         _PyObject_ASSERT(op, PyWeakref_Check(op));
         PyWeakReference *wr = (PyWeakReference *)op;
-        callback = wr->wr_callback;
+        PyObject *callback = wr->wr_callback;
         _PyObject_ASSERT(op, callback != NULL);
 
         /* copy-paste of weakrefobject.c's handle_callback() */
-        temp = PyObject_CallOneArg(callback, (PyObject *)wr);
+        PyObject *temp = PyObject_CallOneArg(callback, (PyObject *)wr);
         if (temp == NULL)
             PyErr_WriteUnraisable(callback);
         else
@@ -1398,8 +1386,8 @@ static int
 visit_reachable_heap(PyObject *op, GCState *gcstate)
 {
     if (_PyObject_IS_GC(op) && _PyObject_GC_IS_TRACKED(op)) {
-        if (!(op->ob_gc_bits & _PyGC_MARKED)) {
-            op->ob_gc_bits += _PyGC_MARKED;
+        if (gc_is_unreachable2(op)) {
+            op->ob_gc_bits -= _PyGC_UNREACHABLE;
             PyGC_Head *gc = AS_GC(op);
             gc->_gc_prev &= ~_PyGC_PREV_MASK;
             _PyObjectQueue_Push(&gcstate->gc_work, op);
@@ -1425,7 +1413,7 @@ mark_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
     }
 
     PyObject *op = FROM_GC(gc);
-    if ((op->ob_gc_bits & _PyGC_MARKED)) {
+    if (!(gc_is_unreachable2(op))) {
         return true;
     }
 
@@ -1439,7 +1427,7 @@ mark_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
         */
     _PyObject_ASSERT_WITH_MSG(op, gc_get_refs(gc) > 0,
                                     "refcount is too small");
-    op->ob_gc_bits += _PyGC_MARKED;
+    op->ob_gc_bits -= _PyGC_UNREACHABLE;
     gc->_gc_prev &= ~_PyGC_PREV_MASK;
     do {
         traverseproc traverse = Py_TYPE(op)->tp_traverse;
@@ -1454,7 +1442,6 @@ mark_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
 struct scan_heap_args {
     GCState *gcstate;
     PyGC_Head *unreachable;
-    PyGC_Head *wrcb_to_call;
 };
 
 static bool
@@ -1467,9 +1454,8 @@ scan_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
     GCState *gcstate = arg->gcstate;
 
     PyObject *op = FROM_GC(gc);
-    if ((op->ob_gc_bits & _PyGC_MARKED)) {
+    if (!(op->ob_gc_bits & _PyGC_UNREACHABLE)) {
         // reachable
-        op->ob_gc_bits -= _PyGC_MARKED;
         gcstate->long_lived_total++;
     }
     else if (has_legacy_finalizer(op)) {
@@ -1479,9 +1465,10 @@ scan_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
     }
     else {
         // unreachable normal object
-        op->ob_gc_bits += _PyGC_UNREACHABLE;
-        gc_list_append(gc, arg->unreachable);
+        /* Add one to the refcount to prevent deallocation while we're holding
+         * on to it in a list. */
         gc_set_unreachable(gc);
+        gc_list_append(gc, arg->unreachable);
     }
     return true;
 }
@@ -1541,14 +1528,14 @@ move_legacy_finalizer_reachable(GCState *gcstate)
 }
 
 static inline void
-deduce_unreachable_heap(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head *wrcb_to_call) {
+deduce_unreachable_heap(GCState *gcstate, PyGC_Head *unreachable) {
     visit_heaps2(mi_heap_tag_gc, mark_heap_visitor, gcstate);
     gc_list_init(unreachable);
 
     gcstate->long_lived_pending = 0;
     gcstate->long_lived_total = 0;
 
-    struct scan_heap_args args = {gcstate, unreachable, wrcb_to_call};
+    struct scan_heap_args args = {gcstate, unreachable};
     visit_heaps2(mi_heap_tag_gc, scan_heap_visitor, &args);
     validate_list(unreachable, unreachable_set);
 
@@ -1569,7 +1556,7 @@ deduce_unreachable_heap(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head *wrc
     }
 
     /* Clear weakrefs and invoke callbacks as necessary. */
-    clear_weakrefs(unreachable, wrcb_to_call);
+    clear_weakrefs(gcstate, unreachable);
 
     validate_list(unreachable, unreachable_set);
 }
@@ -1650,7 +1637,6 @@ static Py_ssize_t
 gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
 {
     PyGC_Head unreachable; /* non-problematic unreachable trash */
-    PyGC_Head wrcb_to_call; /* weakrefs with callbacks to call */
     _PyObjectQueue *to_dealloc = NULL;
     _PyTime_t t1 = 0;   /* initialize to prevent a compiler warning */
     GCState *gcstate = &tstate->interp->gc;
@@ -1715,8 +1701,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     free_dict_keys(&dead_keys);
     assert(split_keys_marked == split_keys_unmarked);
 
-    gc_list_init(&wrcb_to_call);
-    deduce_unreachable_heap(gcstate, &unreachable, &wrcb_to_call);
+    deduce_unreachable_heap(gcstate, &unreachable);
 
     /* Restart the world to call weakrefs and finalizers */
     _PyRuntimeState_StartTheWorld(&_PyRuntime);
@@ -1724,7 +1709,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     /* Dealloc objects with zero refcount that are not tracked by GC */
     dealloc_non_gc(&to_dealloc);
 
-    call_weakref_callbacks(&wrcb_to_call);
+    call_weakref_callbacks(gcstate);
 
     /* Call tp_finalize on objects which have one. */
     finalize_garbage(tstate, &unreachable);

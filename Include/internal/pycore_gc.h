@@ -40,7 +40,6 @@ typedef struct {
 #define _PyGC_PREV_SHIFT            (3)
 #define _PyGC_PREV_MASK             (((uintptr_t) -1) << _PyGC_PREV_SHIFT)
 
-#define _PyGC_MARKED (1)
 #define _PyGC_UNREACHABLE (2)
 #define _PyGC_LEGACY_FINALIZER (4)
 
@@ -215,7 +214,7 @@ struct _gc_runtime_state {
 
     _PyObjectQueue *gc_work;
     _PyObjectQueue *gc_finalizers;
-    _PyObjectQueue *gc_wrcbs;
+    _PyObjectQueue *gc_wrcb_to_call;
 };
 
 
