@@ -791,7 +791,7 @@ clear_weakrefs(GCState *gcstate)
      */
     _PyObjectQueue *q = gcstate->gc_unreachable;
     while (q != NULL) {
-        for (Py_ssize_t i = q->n - 1; i >= 0; --i) {
+        for (Py_ssize_t i = 0, n = q->n; i != n; i++) {
             PyObject *op = q->objs[i];
 
             /* Add one to the refcount to prevent deallocation while we're holding
@@ -972,7 +972,7 @@ finalize_garbage(PyThreadState *tstate, GCState *gcstate)
 {
     _PyObjectQueue *q = gcstate->gc_unreachable;
     while (q != NULL) {
-        for (Py_ssize_t i = q->n - 1; i >= 0; --i) {
+        for (Py_ssize_t i = 0, n = q->n; i != n; i++) {
             PyObject *op = q->objs[i];
             PyGC_Head *gc = AS_GC(op);
             destructor finalize;
@@ -1113,18 +1113,13 @@ mark_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
     return true;
 }
 
-struct scan_heap_args {
-    GCState *gcstate;
-};
-
 static bool
 scan_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* args)
 {
     PyGC_Head *gc = (PyGC_Head *)block;
     if (!gc || !_PyGC_TRACKED(gc)) return true;
 
-    struct scan_heap_args *arg = (struct scan_heap_args *)args;
-    GCState *gcstate = arg->gcstate;
+    GCState *gcstate = (GCState *)args;
 
     PyObject *op = FROM_GC(gc);
     if (!(op->ob_gc_bits & _PyGC_UNREACHABLE)) {
@@ -1201,17 +1196,25 @@ static inline void
 deduce_unreachable_heap(GCState *gcstate) {
     visit_heaps2(mi_heap_tag_gc, mark_heap_visitor, gcstate);
 
-    gcstate->long_lived_pending = 0;
-    gcstate->long_lived_total = 0;
-
-    struct scan_heap_args args = {gcstate};
-    visit_heaps2(mi_heap_tag_gc, scan_heap_visitor, &args);
+    visit_heaps2(mi_heap_tag_gc, scan_heap_visitor, gcstate);
 
     /* finalizers contains the unreachable objects with a legacy finalizer;
      * unreachable objects reachable *from* those are also uncollectable,
      * and we move those into the finalizers list too.
      */
     move_legacy_finalizer_reachable(gcstate);
+
+    // reverse the unreachable queue ordering to better match
+    // the order in which objects are allocated (not guaranteed!)
+    _PyObjectQueue *prev = NULL;
+    _PyObjectQueue *cur = gcstate->gc_unreachable;
+    while (cur) {
+        _PyObjectQueue *next = cur->prev;
+        cur->prev = prev;
+        prev = cur;
+        cur = next;
+    }
+    gcstate->gc_unreachable = prev;
 
     /* Clear weakrefs and enqueue callbacks. */
     clear_weakrefs(gcstate);
@@ -1238,7 +1241,7 @@ handle_resurrected_objects(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head* 
 
     q = gcstate->gc_unreachable;
     while (q != NULL) {
-        for (Py_ssize_t i = q->n - 1; i >= 0; --i) {
+        for (Py_ssize_t i = 0, n = q->n; i != n; i++) {
             PyObject *op = q->objs[i];
             PyGC_Head *gc = AS_GC(op);
             assert(gc_get_refs(gc) == 0);
@@ -1251,7 +1254,7 @@ handle_resurrected_objects(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head* 
     // to being in the "unreachable" list.
     q = gcstate->gc_unreachable;
     while (q != NULL) {
-        for (Py_ssize_t i = q->n - 1; i >= 0; --i) {
+        for (Py_ssize_t i = 0, n = q->n; i != n; i++) {
             PyObject *op = q->objs[i];
             assert(gc_is_unreachable2(op));
             
@@ -1270,7 +1273,7 @@ handle_resurrected_objects(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head* 
     // Find any resurrected objects
     q = gcstate->gc_unreachable;
     while (q != NULL) {
-        for (Py_ssize_t i = q->n - 1; i >= 0; --i) {
+        for (Py_ssize_t i = 0, n = q->n; i != n; i++) {
             PyObject *op = q->objs[i];
             PyGC_Head *gc = AS_GC(op);
             const Py_ssize_t gc_refs = gc_get_refs(gc);
@@ -1325,8 +1328,11 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     _PyObjectQueue *to_dealloc = NULL;
     _PyTime_t t1 = 0;   /* initialize to prevent a compiler warning */
     GCState *gcstate = &tstate->interp->gc;
+
     gcstate->gc_collected = 0; /* # objects collected */
     gcstate->gc_uncollectable = 0; /* # unreachable objects that couldn't be collected */
+    gcstate->long_lived_pending = 0;
+    gcstate->long_lived_total = 0;
 
     // gc_collect_main() must not be called before _PyGC_Init
     // or after _PyGC_Fini()
