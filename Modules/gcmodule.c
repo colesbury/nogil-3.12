@@ -1222,28 +1222,23 @@ free_dict_keys(_PyObjectQueue **queue_ptr)
  * list, due to refcounts falling to 0.
  */
 static void
-finalize_garbage(PyThreadState *tstate, PyGC_Head *collectable)
+finalize_garbage(PyThreadState *tstate, GCState *gcstate)
 {
-    PyGC_Head *gc;
-    PyObject *op;
-    destructor finalize;
+    _PyObjectQueue *q = gcstate->gc_unreachable;
+    while (q != NULL) {
+        for (Py_ssize_t i = q->n - 1; i >= 0; --i) {
+            PyObject *op = q->objs[i];
+            PyGC_Head *gc = AS_GC(op);
+            destructor finalize;
 
-    /* While we're going through the loop, `finalize(op)` may cause op, or
-     * other objects, to be reclaimed via refcounts falling to zero.  So
-     * there's little we can rely on about the structure of the input
-     * `collectable` list across iterations.  For safety, we always take the
-     * first object in that list and move it to a temporary `seen` list.
-     * If objects vanish from the `collectable` and `seen` lists we don't
-     * care.
-     */
-    for (gc = GC_NEXT(collectable); gc != collectable; gc = GC_NEXT(gc)) {
-        op = FROM_GC(gc);
-        if (!_PyGCHead_FINALIZED(gc) &&
-                (finalize = Py_TYPE(op)->tp_finalize) != NULL) {
-            _PyGCHead_SET_FINALIZED(gc);
-            finalize(op);
-            assert(!_PyErr_Occurred(tstate));
+            if (!_PyGCHead_FINALIZED(gc) &&
+                    (finalize = Py_TYPE(op)->tp_finalize) != NULL) {
+                _PyGCHead_SET_FINALIZED(gc);
+                finalize(op);
+                assert(!_PyErr_Occurred(tstate));
+            }
         }
+        q = q->prev;
     }
 }
 
@@ -1698,14 +1693,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     call_weakref_callbacks(gcstate);
 
     /* Call tp_finalize on objects which have one. */
-    PyObject *op;
-    gc_list_init(&unreachable);
-    while ((op = _PyObjectQueue_Pop(&gcstate->gc_unreachable))) {
-        gc_list_append(AS_GC(op), &unreachable);
-        gc_set_unreachable(AS_GC(op));
-    }
-    validate_list(&unreachable, unreachable_set);
-    finalize_garbage(tstate, &unreachable);
+    finalize_garbage(tstate, gcstate);
 
     _PyRuntimeState_StopTheWorld(&_PyRuntime);
 
@@ -1714,6 +1702,13 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     /* Handle any objects that may have resurrected after the call
      * to 'finalize_garbage' and continue the collection with the
      * objects that are still unreachable */
+    PyObject *op;
+    gc_list_init(&unreachable);
+    while ((op = _PyObjectQueue_Pop(&gcstate->gc_unreachable))) {
+        gc_list_append(AS_GC(op), &unreachable);
+        gc_set_unreachable(AS_GC(op));
+    }
+    validate_list(&unreachable, unreachable_set);
     PyGC_Head final_unreachable;
     handle_resurrected_objects(&unreachable, &final_unreachable);
 
