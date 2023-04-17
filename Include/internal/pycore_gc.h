@@ -41,7 +41,7 @@ typedef struct {
 #define _PyGC_PREV_MASK             (((uintptr_t) -1) << _PyGC_PREV_SHIFT)
 
 #define _PyGC_UNREACHABLE (2)
-#define _PyGC_LEGACY_FINALIZER (4)
+#define _PyGC_MASK_TID_REFCOUNT (8)
 
 static inline PyGC_Head* _Py_AS_GC(PyObject *op) {
     char *mem = _Py_STATIC_CAST(char*, op);

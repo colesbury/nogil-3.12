@@ -2094,6 +2094,7 @@ _Py_NewReference(PyObject *op)
     _Py_IncRefTotal();
 #endif
     op->ob_tid = _Py_ThreadId();
+    op->ob_gc_bits = 0;
     op->ob_ref_local = _Py_REF_LOCAL_INIT;
     op->ob_ref_shared = _Py_REF_SHARED_INIT;
 #ifdef Py_TRACE_REFS
