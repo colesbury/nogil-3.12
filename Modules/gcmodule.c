@@ -241,84 +241,6 @@ gc_list_is_empty(PyGC_Head *list)
     return (list->_gc_next == (uintptr_t)list);
 }
 
-/* Append `node` to `list`. */
-static inline void
-gc_list_append(PyGC_Head *node, PyGC_Head *list)
-{
-    PyGC_Head *last = (PyGC_Head *)list->_gc_prev;
-
-    // last <-> node
-    _PyGCHead_SET_PREV(node, last);
-    _PyGCHead_SET_NEXT(last, node);
-
-    // node <-> list
-    _PyGCHead_SET_NEXT(node, list);
-    list->_gc_prev = (uintptr_t)node;
-}
-
-/* Remove `node` from the gc list it's currently in. */
-static inline void
-gc_list_remove(PyGC_Head *node)
-{
-    PyGC_Head *prev = GC_PREV(node);
-    PyGC_Head *next = GC_NEXT(node);
-
-    _PyGCHead_SET_NEXT(prev, next);
-    _PyGCHead_SET_PREV(next, prev);
-
-    /* object is not currently tracked */
-    // assert((node->_gc_prev & _PyGC_PREV_MASK_TRACKED) == 0);
-
-    node->_gc_next = 0;
-    node->_gc_prev &= (_PyGC_PREV_MASK_TRACKED | _PyGC_PREV_MASK_FINALIZED);
-}
-
-/* Move `node` from the gc list it's currently in (which is not explicitly
- * named here) to the end of `list`.  This is semantically the same as
- * gc_list_remove(node) followed by gc_list_append(node, list).
- */
-static void
-gc_list_move(PyGC_Head *node, PyGC_Head *list)
-{
-    /* Unlink from current list. */
-    PyGC_Head *from_prev = GC_PREV(node);
-    PyGC_Head *from_next = GC_NEXT(node);
-    _PyGCHead_SET_NEXT(from_prev, from_next);
-    _PyGCHead_SET_PREV(from_next, from_prev);
-
-    /* Relink at end of new list. */
-    // list must not have flags.  So we can skip macros.
-    PyGC_Head *to_prev = (PyGC_Head*)list->_gc_prev;
-    _PyGCHead_SET_PREV(node, to_prev);
-    _PyGCHead_SET_NEXT(to_prev, node);
-    list->_gc_prev = (uintptr_t)node;
-    _PyGCHead_SET_NEXT(node, list);
-}
-
-static void
-gc_list_clear(PyGC_Head *list)
-{
-    PyGC_Head *gc = GC_NEXT(list);
-    while (gc != list) {
-        PyGC_Head *next = GC_NEXT(gc);
-        gc->_gc_next = 0;
-        gc->_gc_prev &= ~_PyGC_PREV_MASK;
-        gc = next;
-    }
-    gc_list_init(list);
-}
-
-static Py_ssize_t
-gc_list_size(PyGC_Head *list)
-{
-    PyGC_Head *gc;
-    Py_ssize_t n = 0;
-    for (gc = GC_NEXT(list); gc != list; gc = GC_NEXT(gc)) {
-        n++;
-    }
-    return n;
-}
-
 static Py_ssize_t
 _Py_GC_REFCNT(PyObject *op)
 {
@@ -836,18 +758,6 @@ static void
 incref_merge(PyObject *op)
 {
     merge_refcount(op, 1);
-}
-
-/* Subtracts one from the refcount field. */
-static void
-decref_merged(PyObject *op)
-{
-    assert(_Py_REF_IS_MERGED(op->ob_ref_shared));
-    assert(((op->ob_ref_shared) >> _Py_REF_SHARED_SHIFT) > 1);
-#ifdef Py_REF_DEBUG
-    _Py_DecRefTotal();
-#endif
-    op->ob_ref_shared -= (1 << _Py_REF_SHARED_SHIFT);
 }
 
 static void
@@ -1380,18 +1290,6 @@ handle_resurrected_objects(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head* 
         }
         q = q->prev;
     }
-
-    // PyObject *op;
-    // while ((op = _PyObjectQueue_Pop(&gcstate->gc_unreachable))) {
-    //     if (gc_is_unreachable2(op)) {
-    //         op->ob_gc_bits -= _PyGC_UNREACHABLE;
-    //         gc_list_append(AS_GC(op), still_unreachable);
-    //     }
-    //     else {
-    //         decref_merged(op);
-    //     }
-    //     assert(op->ob_gc_bits == 0);
-    // }
 }
 
 static void
@@ -2458,7 +2356,6 @@ void
 PyObject_GC_Del(void *op)
 {
     size_t presize = _PyType_PreHeaderSize(((PyObject *)op)->ob_type);
-    PyGC_Head *g = AS_GC(op);
     if (_PyObject_GC_IS_TRACKED(op)) {
 #ifdef Py_DEBUG
         if (PyErr_WarnExplicitFormat(PyExc_ResourceWarning, "gc", 0,
@@ -2467,7 +2364,6 @@ PyObject_GC_Del(void *op)
             PyErr_WriteUnraisable(NULL);
         }
 #endif
-        gc_list_remove(g);
     }
     PyMemAllocatorEx *a = &_PyRuntime.allocators.standard.gc;
     a->free(a->ctx, ((char *)op)-presize);
