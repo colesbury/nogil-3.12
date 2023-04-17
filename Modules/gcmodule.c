@@ -805,29 +805,11 @@ visit_decref_unreachable(PyObject *op, void *data)
          * generation being collected, which can be recognized
          * because only they have positive gc_refs.
          */
-        if (gc_is_unreachable(gc)) {
+        if (gc_is_unreachable2(op)) {
             gc_decref(gc);
         }
     }
     return 0;
-}
-
-/* Subtract internal references from gc_refs.  After this, gc_refs is >= 0
- * for all objects in containers, and is GC_REACHABLE for all tracked gc
- * objects not in containers.  The ones with gc_refs > 0 are directly
- * reachable from outside containers, and so can't be collected.
- */
-static void
-subtract_refs_unreachable(PyGC_Head *containers)
-{
-    traverseproc traverse;
-    PyGC_Head *gc = GC_NEXT(containers);
-    for (; gc != containers; gc = GC_NEXT(gc)) {
-        traverse = Py_TYPE(FROM_GC(gc))->tp_traverse;
-        (void) traverse(FROM_GC(gc),
-                       (visitproc)visit_decref_unreachable,
-                       NULL);
-    }
 }
 
 /* A traversal callback for move_unreachable. */
@@ -1570,6 +1552,9 @@ handle_resurrected_objects(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head* 
         q = q->prev;
     }
 
+    // First reset the reference count for unreachable objects. Subtract one
+    // from the reference count to account for the refcount increment due
+    // to being in the "unreachable" list.
     q = gcstate->gc_unreachable;
     while (q != NULL) {
         for (Py_ssize_t i = q->n - 1; i >= 0; --i) {
@@ -1579,6 +1564,11 @@ handle_resurrected_objects(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head* 
             Py_ssize_t refcnt = _Py_GC_REFCNT(op);
             _PyObject_ASSERT(op, refcnt > 0);
             gc_add_refs(AS_GC(op), refcnt - 1);
+
+            traverseproc traverse = Py_TYPE(op)->tp_traverse;
+            (void) traverse(op,
+                        (visitproc)visit_decref_unreachable,
+                        NULL);
         }
         q = q->prev;
     }
@@ -1588,14 +1578,10 @@ handle_resurrected_objects(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head* 
         Py_ssize_t refs = gc_get_refs(AS_GC(op));
         gc_list_append(AS_GC(op), unreachable);
         gc_set_unreachable(AS_GC(op));
+        op->ob_gc_bits = 0;
         gc_set_refs(AS_GC(op), refs);
     }
 
-    // First reset the reference count for unreachable objects. Subtract one
-    // from the reference count to account for the refcount increment due
-    // to being in the "unreachable" list.
-
-    subtract_refs_unreachable(unreachable);
     clear_unreachable_mask(unreachable);
 
     // After the call to deduce_unreachable, the 'still_unreachable' set will
