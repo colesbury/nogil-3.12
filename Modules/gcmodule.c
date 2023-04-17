@@ -1556,19 +1556,44 @@ IMPORTANT: After a call to this function, the 'still_unreachable' set will have 
 PREV_MARK_COLLECTING set, but the objects in this set are going to be removed so
 we can skip the expense of clearing the flag to avoid extra iteration. */
 static inline void
-handle_resurrected_objects(PyGC_Head *unreachable, PyGC_Head* still_unreachable)
+handle_resurrected_objects(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head* still_unreachable)
 {
     validate_list(unreachable, unreachable_set);
+    _PyObjectQueue *q;
+
+    q = gcstate->gc_unreachable;
+    while (q != NULL) {
+        for (Py_ssize_t i = q->n - 1; i >= 0; --i) {
+            PyObject *op = q->objs[i];
+            PyGC_Head *gc = AS_GC(op);
+            assert(gc_get_refs(gc) == 0);
+        }
+        q = q->prev;
+    }
+
+    q = gcstate->gc_unreachable;
+    while (q != NULL) {
+        for (Py_ssize_t i = q->n - 1; i >= 0; --i) {
+            PyObject *op = q->objs[i];
+            
+            Py_ssize_t refcnt = _Py_GC_REFCNT(op);
+            _PyObject_ASSERT(op, refcnt > 0);
+            gc_add_refs(AS_GC(op), refcnt - 1);
+        }
+        q = q->prev;
+    }
+
+    PyObject *op;
+    while ((op = _PyObjectQueue_Pop(&gcstate->gc_unreachable))) {
+        Py_ssize_t refs = gc_get_refs(AS_GC(op));
+        gc_list_append(AS_GC(op), unreachable);
+        gc_set_unreachable(AS_GC(op));
+        gc_set_refs(AS_GC(op), refs);
+    }
 
     // First reset the reference count for unreachable objects. Subtract one
     // from the reference count to account for the refcount increment due
     // to being in the "unreachable" list.
-    PyGC_Head *gc;
-    for (gc = GC_NEXT(unreachable); gc != unreachable; gc = GC_NEXT(gc)) {
-        Py_ssize_t refcnt = _Py_GC_REFCNT(FROM_GC(gc));
-        gc_set_refs(gc, refcnt - 1);
-        _PyObject_ASSERT(FROM_GC(gc), refcnt > 0);
-    }
 
     subtract_refs_unreachable(unreachable);
     clear_unreachable_mask(unreachable);
@@ -1702,15 +1727,9 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     /* Handle any objects that may have resurrected after the call
      * to 'finalize_garbage' and continue the collection with the
      * objects that are still unreachable */
-    PyObject *op;
     gc_list_init(&unreachable);
-    while ((op = _PyObjectQueue_Pop(&gcstate->gc_unreachable))) {
-        gc_list_append(AS_GC(op), &unreachable);
-        gc_set_unreachable(AS_GC(op));
-    }
-    validate_list(&unreachable, unreachable_set);
     PyGC_Head final_unreachable;
-    handle_resurrected_objects(&unreachable, &final_unreachable);
+    handle_resurrected_objects(gcstate, &unreachable, &final_unreachable);
 
     /* Clear free list only during the collection of the highest
      * generation */
