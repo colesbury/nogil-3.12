@@ -694,8 +694,11 @@ update_refs(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size
     // Add the actual refcount to gc_refs.
     Py_ssize_t refcount = _Py_GC_REFCNT(op);
     _PyObject_ASSERT(op, refcount >= 0);
+    if (!(op->ob_gc_bits & _PyGC_UNREACHABLE)) {
+        op->ob_tid = 0;
+        op->ob_gc_bits = _PyGC_UNREACHABLE;
+    }
     gc_add_refs(gc, refcount);
-    op->ob_gc_bits = _PyGC_UNREACHABLE;
 
     // Subtract internal references from gc_refs. Objects with gc_refs > 0
     // are directly reachable from outside containers, and so can't be
@@ -1113,6 +1116,21 @@ mark_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
     return true;
 }
 
+static void
+restore_tid(mi_segment_t *segment, PyObject *op)
+{
+    if (_Py_REF_IS_MERGED(op->ob_ref_shared)) {
+        op->ob_tid = 0;
+    }
+    else if (segment->thread_id == 0) {
+        merge_refcount(op, 0);
+    }
+    else {
+        // NOTE: may change ob_tid
+        op->ob_tid = segment->thread_id;
+    }
+}
+
 static bool
 scan_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* args)
 {
@@ -1120,8 +1138,10 @@ scan_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
     if (!gc || !_PyGC_TRACKED(gc)) return true;
 
     GCState *gcstate = (GCState *)args;
-
     PyObject *op = FROM_GC(gc);
+
+    restore_tid(_mi_ptr_segment(block), op);
+
     if (!(op->ob_gc_bits & _PyGC_UNREACHABLE)) {
         // reachable
         gcstate->long_lived_total++;
@@ -1230,6 +1250,7 @@ handle_resurrected_objects(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head* 
             PyGC_Head *gc = AS_GC(op);
             const Py_ssize_t gc_refs = gc_get_refs(gc);
             assert(gc_refs >= 0);
+            restore_tid(_mi_ptr_segment(op), op);
             if (gc_refs == 0 || !gc_is_unreachable2(op)) {
                 continue;
             }
