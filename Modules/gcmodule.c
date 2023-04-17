@@ -109,7 +109,6 @@ gc_set_refs(PyGC_Head *g, Py_ssize_t refs)
 static inline void
 gc_add_refs(PyGC_Head *g, Py_ssize_t refs)
 {
-    assert(!gc_is_unreachable(g)); // if so we should clear it???
     g->_gc_prev += (refs << _PyGC_PREV_SHIFT);
 }
 
@@ -1575,6 +1574,7 @@ handle_resurrected_objects(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head* 
     while (q != NULL) {
         for (Py_ssize_t i = q->n - 1; i >= 0; --i) {
             PyObject *op = q->objs[i];
+            assert(gc_is_unreachable2(op));
             
             Py_ssize_t refcnt = _Py_GC_REFCNT(op);
             _PyObject_ASSERT(op, refcnt > 0);
