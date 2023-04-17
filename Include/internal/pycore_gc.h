@@ -213,6 +213,7 @@ struct _gc_runtime_state {
     Py_ssize_t gc_uncollectable;
 
     _PyObjectQueue *gc_work;
+    _PyObjectQueue *gc_unreachable;
     _PyObjectQueue *gc_finalizers;
     _PyObjectQueue *gc_wrcb_to_call;
 };

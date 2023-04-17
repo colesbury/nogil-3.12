@@ -1014,6 +1014,13 @@ decref_merged(PyObject *op)
     op->ob_ref_shared -= (1 << _Py_REF_SHARED_SHIFT);
 }
 
+static void
+debug_cycle(const char *msg, PyObject *op)
+{
+    PySys_FormatStderr("gc: %s <%s %p>\n",
+                       msg, Py_TYPE(op)->tp_name, op);
+}
+
 /* Clear all weakrefs to unreachable objects, and if such a weakref has a
  * callback, invoke it if necessary.  Note that it's possible for such
  * weakrefs to be outside the unreachable set -- indeed, those are precisely
@@ -1026,12 +1033,8 @@ decref_merged(PyObject *op)
  * no object in `unreachable` is weakly referenced anymore.
  */
 static void
-clear_weakrefs(GCState *gcstate, PyGC_Head *unreachable)
+clear_weakrefs(GCState *gcstate)
 {
-    PyGC_Head *gc;
-    PyObject *op;               /* generally FROM_GC(gc) */
-    PyGC_Head *next;
-
     /* Clear all weakrefs to the objects in unreachable.  If such a weakref
      * also has a callback, move it into `wrcb_to_call` if the callback
      * needs to be invoked.  Note that we cannot invoke any callbacks until
@@ -1040,96 +1043,104 @@ clear_weakrefs(GCState *gcstate, PyGC_Head *unreachable)
      * make another pass over wrcb_to_call, invoking callbacks, after this
      * pass completes.
      */
-    for (gc = GC_NEXT(unreachable); gc != unreachable; gc = next) {
-        op = FROM_GC(gc);
-        next = GC_NEXT(gc);
+    _PyObjectQueue *q = gcstate->gc_unreachable;
+    while (q != NULL) {
+        for (Py_ssize_t i = q->n - 1; i >= 0; --i) {
+            PyObject *op = q->objs[i];
 
-        /* Add one to the refcount to prevent deallocation while we're holding
-         * on to it in a list. */
-        incref_merge(op);
+            /* Add one to the refcount to prevent deallocation while we're holding
+            * on to it in a list. */
+            incref_merge(op);
 
-        if (PyWeakref_Check(op)) {
-            /* A weakref inside the unreachable set must be cleared.  If we
-             * allow its callback to execute inside delete_garbage(), it
-             * could expose objects that have tp_clear already called on
-             * them.  Or, it could resurrect unreachable objects.  One way
-             * this can happen is if some container objects do not implement
-             * tp_traverse.  Then, wr_object can be outside the unreachable
-             * set but can be deallocated as a result of breaking the
-             * reference cycle.  If we don't clear the weakref, the callback
-             * will run and potentially cause a crash.  See bpo-38006 for
-             * one example.
-             */
-            _PyWeakref_DetachRef((PyWeakReference *)op);
-        }
-
-        if (! _PyType_SUPPORTS_WEAKREFS(Py_TYPE(op)))
-            continue;
-
-        /* It supports weakrefs.  Does it have any?
-         *
-         * This is never triggered for static types so we can avoid the
-         * (slightly) more costly _PyObject_GET_WEAKREFS_LISTPTR().
-         */
-        PyWeakrefBase *ctrl = (PyWeakrefBase *)_PyObject_GET_WEAKREF_CONTROL(op);
-
-        if (!ctrl)
-            continue;
-
-        PyWeakrefBase *ref;
-        for (ref = ctrl->wr_next; ref != ctrl; ref = ref->wr_next) {
-            PyWeakReference *wr = (PyWeakReference *)ref;
-
-            if (wr->wr_callback == NULL) {
-                /* no callback */
-                continue;
+            /* Print debugging information. */
+            if (gcstate->debug & DEBUG_COLLECTABLE) {
+                debug_cycle("collectable", op);
             }
 
-            /* Headache time.  `op` is going away, and is weakly referenced by
-             * `wr`, which has a callback.  Should the callback be invoked?  If wr
-             * is also trash, no:
-             *
-             * 1. There's no need to call it.  The object and the weakref are
-             *    both going away, so it's legitimate to pretend the weakref is
-             *    going away first.  The user has to ensure a weakref outlives its
-             *    referent if they want a guarantee that the wr callback will get
-             *    invoked.
-             *
-             * 2. It may be catastrophic to call it.  If the callback is also in
-             *    cyclic trash (CT), then although the CT is unreachable from
-             *    outside the current generation, CT may be reachable from the
-             *    callback.  Then the callback could resurrect insane objects.
-             *
-             * Since the callback is never needed and may be unsafe in this case,
-             * wr is simply left in the unreachable set.  Note that because we
-             * already called _PyWeakref_ClearRef(wr), its callback will never
-             * trigger.
-             *
-             * OTOH, if wr isn't part of CT, we should invoke the callback:  the
-             * weakref outlived the trash.  Note that since wr isn't CT in this
-             * case, its callback can't be CT either -- wr acted as an external
-             * root to this generation, and therefore its callback did too.  So
-             * nothing in CT is reachable from the callback either, so it's hard
-             * to imagine how calling it later could create a problem for us.  wr
-             * is moved to wrcb_to_call in this case.
-             */
-            if (gc_is_unreachable(AS_GC(wr))) {
-                /* it should already have been cleared above */
-                // assert(wr->wr_object == Py_None);
-                continue;
+            if (PyWeakref_Check(op)) {
+                /* A weakref inside the unreachable set must be cleared.  If we
+                * allow its callback to execute inside delete_garbage(), it
+                * could expose objects that have tp_clear already called on
+                * them.  Or, it could resurrect unreachable objects.  One way
+                * this can happen is if some container objects do not implement
+                * tp_traverse.  Then, wr_object can be outside the unreachable
+                * set but can be deallocated as a result of breaking the
+                * reference cycle.  If we don't clear the weakref, the callback
+                * will run and potentially cause a crash.  See bpo-38006 for
+                * one example.
+                */
+                _PyWeakref_DetachRef((PyWeakReference *)op);
             }
 
-            /* Create a new reference so that wr can't go away
-             * before we can process it again.
-             */
-            Py_INCREF(wr);
-            _PyObjectQueue_Push(&gcstate->gc_wrcb_to_call, (PyObject *)wr);
-        }
+            if (! _PyType_SUPPORTS_WEAKREFS(Py_TYPE(op)))
+                continue;
 
-        /* Clear the root weakref but does not invoke any callbacks.
-         * Other weak references reference this object
-         */
-        _PyObject_ClearWeakRefsFromGC(op);
+            /* It supports weakrefs.  Does it have any?
+            *
+            * This is never triggered for static types so we can avoid the
+            * (slightly) more costly _PyObject_GET_WEAKREFS_LISTPTR().
+            */
+            PyWeakrefBase *ctrl = (PyWeakrefBase *)_PyObject_GET_WEAKREF_CONTROL(op);
+
+            if (!ctrl)
+                continue;
+
+            PyWeakrefBase *ref;
+            for (ref = ctrl->wr_next; ref != ctrl; ref = ref->wr_next) {
+                PyWeakReference *wr = (PyWeakReference *)ref;
+
+                if (wr->wr_callback == NULL) {
+                    /* no callback */
+                    continue;
+                }
+
+                /* Headache time.  `op` is going away, and is weakly referenced by
+                * `wr`, which has a callback.  Should the callback be invoked?  If wr
+                * is also trash, no:
+                *
+                * 1. There's no need to call it.  The object and the weakref are
+                *    both going away, so it's legitimate to pretend the weakref is
+                *    going away first.  The user has to ensure a weakref outlives its
+                *    referent if they want a guarantee that the wr callback will get
+                *    invoked.
+                *
+                * 2. It may be catastrophic to call it.  If the callback is also in
+                *    cyclic trash (CT), then although the CT is unreachable from
+                *    outside the current generation, CT may be reachable from the
+                *    callback.  Then the callback could resurrect insane objects.
+                *
+                * Since the callback is never needed and may be unsafe in this case,
+                * wr is simply left in the unreachable set.  Note that because we
+                * already called _PyWeakref_ClearRef(wr), its callback will never
+                * trigger.
+                *
+                * OTOH, if wr isn't part of CT, we should invoke the callback:  the
+                * weakref outlived the trash.  Note that since wr isn't CT in this
+                * case, its callback can't be CT either -- wr acted as an external
+                * root to this generation, and therefore its callback did too.  So
+                * nothing in CT is reachable from the callback either, so it's hard
+                * to imagine how calling it later could create a problem for us.  wr
+                * is moved to wrcb_to_call in this case.
+                */
+                if (gc_is_unreachable2((PyObject *)wr)) {
+                    /* it should already have been cleared above */
+                    // assert(wr->wr_object == Py_None);
+                    continue;
+                }
+
+                /* Create a new reference so that wr can't go away
+                * before we can process it again.
+                */
+                Py_INCREF(wr);
+                _PyObjectQueue_Push(&gcstate->gc_wrcb_to_call, (PyObject *)wr);
+            }
+
+            /* Clear the root weakref but does not invoke any callbacks.
+            * Other weak references reference this object
+            */
+            _PyObject_ClearWeakRefsFromGC(op);
+        }
+        q = q->prev;
     }
 }
 
@@ -1166,13 +1177,6 @@ call_weakref_callbacks(GCState *gcstate)
          */
         Py_DECREF(op);
     }
-}
-
-static void
-debug_cycle(const char *msg, PyObject *op)
-{
-    PySys_FormatStderr("gc: %s <%s %p>\n",
-                       msg, Py_TYPE(op)->tp_name, op);
 }
 
 static void
@@ -1441,7 +1445,6 @@ mark_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
 
 struct scan_heap_args {
     GCState *gcstate;
-    PyGC_Head *unreachable;
 };
 
 static bool
@@ -1461,14 +1464,12 @@ scan_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
     else if (has_legacy_finalizer(op)) {
         // unreachable but with legacy finalizer
         op->ob_gc_bits += _PyGC_LEGACY_FINALIZER;
+        op->ob_gc_bits -= _PyGC_UNREACHABLE;        
         _PyObjectQueue_Push(&gcstate->gc_finalizers, op);
     }
     else {
         // unreachable normal object
-        /* Add one to the refcount to prevent deallocation while we're holding
-         * on to it in a list. */
-        gc_set_unreachable(gc);
-        gc_list_append(gc, arg->unreachable);
+        _PyObjectQueue_Push(&gcstate->gc_unreachable, op);
     }
     return true;
 }
@@ -1478,13 +1479,12 @@ static int
 visit_move(PyObject *op, GCState *gcstate)
 {
     if (_PyObject_IS_GC(op)) {
-        if ((op->ob_gc_bits & _PyGC_UNREACHABLE)) {
+        if (gc_is_unreachable2(op)) {
             assert(_PyObject_GC_IS_TRACKED(op));
             assert((op->ob_gc_bits & _PyGC_LEGACY_FINALIZER) == 0);
             op->ob_gc_bits -= _PyGC_UNREACHABLE;
             op->ob_gc_bits += _PyGC_LEGACY_FINALIZER;
             _PyObjectQueue_Push(&gcstate->gc_finalizers, op);
-            gc_list_remove(AS_GC(op));
         }
     }
     return 0;
@@ -1528,16 +1528,14 @@ move_legacy_finalizer_reachable(GCState *gcstate)
 }
 
 static inline void
-deduce_unreachable_heap(GCState *gcstate, PyGC_Head *unreachable) {
+deduce_unreachable_heap(GCState *gcstate) {
     visit_heaps2(mi_heap_tag_gc, mark_heap_visitor, gcstate);
-    gc_list_init(unreachable);
 
     gcstate->long_lived_pending = 0;
     gcstate->long_lived_total = 0;
 
-    struct scan_heap_args args = {gcstate, unreachable};
+    struct scan_heap_args args = {gcstate};
     visit_heaps2(mi_heap_tag_gc, scan_heap_visitor, &args);
-    validate_list(unreachable, unreachable_set);
 
     /* finalizers contains the unreachable objects with a legacy finalizer;
      * unreachable objects reachable *from* those are also uncollectable,
@@ -1545,20 +1543,8 @@ deduce_unreachable_heap(GCState *gcstate, PyGC_Head *unreachable) {
      */
     move_legacy_finalizer_reachable(gcstate);
 
-    validate_list(unreachable, unreachable_set);
-
-    /* Print debugging information. */
-    if (gcstate->debug & DEBUG_COLLECTABLE) {
-        PyGC_Head *gc;
-        for (gc = GC_NEXT(unreachable); gc != unreachable; gc = GC_NEXT(gc)) {
-            debug_cycle("collectable", FROM_GC(gc));
-        }
-    }
-
-    /* Clear weakrefs and invoke callbacks as necessary. */
-    clear_weakrefs(gcstate, unreachable);
-
-    validate_list(unreachable, unreachable_set);
+    /* Clear weakrefs and enqueue callbacks. */
+    clear_weakrefs(gcstate);
 }
 
 /* Handle objects that may have resurrected after a call to 'finalize_garbage', moving
@@ -1701,7 +1687,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     free_dict_keys(&dead_keys);
     assert(split_keys_marked == split_keys_unmarked);
 
-    deduce_unreachable_heap(gcstate, &unreachable);
+    deduce_unreachable_heap(gcstate);
 
     /* Restart the world to call weakrefs and finalizers */
     _PyRuntimeState_StartTheWorld(&_PyRuntime);
@@ -1712,6 +1698,13 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     call_weakref_callbacks(gcstate);
 
     /* Call tp_finalize on objects which have one. */
+    PyObject *op;
+    gc_list_init(&unreachable);
+    while ((op = _PyObjectQueue_Pop(&gcstate->gc_unreachable))) {
+        gc_list_append(AS_GC(op), &unreachable);
+        gc_set_unreachable(AS_GC(op));
+    }
+    validate_list(&unreachable, unreachable_set);
     finalize_garbage(tstate, &unreachable);
 
     _PyRuntimeState_StopTheWorld(&_PyRuntime);
