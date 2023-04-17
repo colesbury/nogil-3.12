@@ -1573,29 +1573,40 @@ handle_resurrected_objects(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head* 
         q = q->prev;
     }
 
-    PyObject *op;
-    while ((op = _PyObjectQueue_Pop(&gcstate->gc_unreachable))) {
-        Py_ssize_t refs = gc_get_refs(AS_GC(op));
-        gc_list_append(AS_GC(op), unreachable);
-        gc_set_unreachable(AS_GC(op));
-        op->ob_gc_bits = 0;
-        gc_set_refs(AS_GC(op), refs);
+    // Find any resurrected objects
+    q = gcstate->gc_unreachable;
+    while (q != NULL) {
+        for (Py_ssize_t i = q->n - 1; i >= 0; --i) {
+            PyObject *op = q->objs[i];
+            PyGC_Head *gc = AS_GC(op);
+            const Py_ssize_t gc_refs = gc_get_refs(gc);
+            assert(gc_refs >= 0);
+            if (gc_refs == 0 || !gc_is_unreachable2(op)) {
+                continue;
+            }
+            op->ob_gc_bits -= _PyGC_UNREACHABLE;
+            gc->_gc_prev &= ~_PyGC_PREV_MASK;
+            do {
+                traverseproc traverse = Py_TYPE(op)->tp_traverse;
+                (void) traverse(op,
+                        (visitproc)visit_reachable_heap,
+                        gcstate);
+                op = _PyObjectQueue_Pop(&gcstate->gc_work);
+            } while (op != NULL);
+        }
+        q = q->prev;
     }
 
-    clear_unreachable_mask(unreachable);
-
-    // After the call to deduce_unreachable, the 'still_unreachable' set will
-    // have the PREV_MARK_COLLECTING set, but the objects are going to be
-    // removed so we can skip the expense of clearing the flag.
-    PyGC_Head* resurrected = unreachable;
-    deduce_unreachable(resurrected, still_unreachable);
-
-    while (!gc_list_is_empty(resurrected)) {
-        PyGC_Head *gc = GC_NEXT(resurrected);
-        PyObject *op = FROM_GC(gc);
-
-        gc_list_remove(gc);
-        decref_merged(op);
+    PyObject *op;
+    while ((op = _PyObjectQueue_Pop(&gcstate->gc_unreachable))) {
+        if (gc_is_unreachable2(op)) {
+            op->ob_gc_bits -= _PyGC_UNREACHABLE;
+            gc_list_append(AS_GC(op), still_unreachable);
+        }
+        else {
+            decref_merged(op);
+        }
+        assert(op->ob_gc_bits == 0);
     }
 }
 
@@ -1715,6 +1726,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
      * objects that are still unreachable */
     gc_list_init(&unreachable);
     PyGC_Head final_unreachable;
+    gc_list_init(&final_unreachable);
     handle_resurrected_objects(gcstate, &unreachable, &final_unreachable);
 
     /* Clear free list only during the collection of the highest
