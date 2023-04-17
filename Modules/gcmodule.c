@@ -1228,38 +1228,37 @@ finalize_garbage(PyThreadState *tstate, GCState *gcstate)
  * objects may be freed.  It is possible I screwed something up here.
  */
 static void
-delete_garbage(PyThreadState *tstate, GCState *gcstate,
-               PyGC_Head *collectable)
+delete_garbage(PyThreadState *tstate, GCState *gcstate)
 {
     assert(!_PyErr_Occurred(tstate));
 
-    while (!gc_list_is_empty(collectable)) {
-        PyGC_Head *gc = GC_NEXT(collectable);
-        PyObject *op = FROM_GC(gc);
+    PyObject *op;
+    while ((op = _PyObjectQueue_Pop(&gcstate->gc_unreachable))) {
+        if (gc_is_unreachable2(op)) {
+            gcstate->gc_collected++;
+            op->ob_gc_bits -= _PyGC_UNREACHABLE;
 
-        gc_list_remove(gc);
+            _PyObject_ASSERT_WITH_MSG(op, _Py_GC_REFCNT(op) > 0,
+                                    "refcount is too small");
 
-        _PyObject_ASSERT_WITH_MSG(op, _Py_GC_REFCNT(op) > 0,
-                                  "refcount is too small");
-
-        if (gcstate->debug & DEBUG_SAVEALL) {
-            assert(gcstate->garbage != NULL);
-            if (PyList_Append(gcstate->garbage, op) < 0) {
-                _PyErr_Clear(tstate);
-            }
-        }
-        else {
-            inquiry clear;
-            if ((clear = Py_TYPE(op)->tp_clear) != NULL) {
-                // printf("clearing %p (op=%p)\n", gc, op);
-                (void) clear(op);
-                if (_PyErr_Occurred(tstate)) {
-                    _PyErr_WriteUnraisableMsg("in tp_clear of",
-                                              (PyObject*)Py_TYPE(op));
+            if (gcstate->debug & DEBUG_SAVEALL) {
+                assert(gcstate->garbage != NULL);
+                if (PyList_Append(gcstate->garbage, op) < 0) {
+                    _PyErr_Clear(tstate);
                 }
-                // printf("refcnt after clear of %p = %d\n", gc, (int)_Py_GC_REFCNT(op));
+            }
+            else {
+                inquiry clear;
+                if ((clear = Py_TYPE(op)->tp_clear) != NULL) {
+                    (void) clear(op);
+                    if (_PyErr_Occurred(tstate)) {
+                        _PyErr_WriteUnraisableMsg("in tp_clear of",
+                                                (PyObject*)Py_TYPE(op));
+                    }
+                }
             }
         }
+        assert(op->ob_gc_bits == 0);
         Py_DECREF(op);
     }
 }
@@ -1597,17 +1596,17 @@ handle_resurrected_objects(GCState *gcstate, PyGC_Head *unreachable, PyGC_Head* 
         q = q->prev;
     }
 
-    PyObject *op;
-    while ((op = _PyObjectQueue_Pop(&gcstate->gc_unreachable))) {
-        if (gc_is_unreachable2(op)) {
-            op->ob_gc_bits -= _PyGC_UNREACHABLE;
-            gc_list_append(AS_GC(op), still_unreachable);
-        }
-        else {
-            decref_merged(op);
-        }
-        assert(op->ob_gc_bits == 0);
-    }
+    // PyObject *op;
+    // while ((op = _PyObjectQueue_Pop(&gcstate->gc_unreachable))) {
+    //     if (gc_is_unreachable2(op)) {
+    //         op->ob_gc_bits -= _PyGC_UNREACHABLE;
+    //         gc_list_append(AS_GC(op), still_unreachable);
+    //     }
+    //     else {
+    //         decref_merged(op);
+    //     }
+    //     assert(op->ob_gc_bits == 0);
+    // }
 }
 
 static void
@@ -1741,8 +1740,8 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     * the reference cycles to be broken.  It may also cause some objects
     * in finalizers to be freed.
     */
-    gcstate->gc_collected += gc_list_size(&final_unreachable);
-    delete_garbage(tstate, gcstate, &final_unreachable);
+    // gcstate->gc_collected += gc_list_size(&final_unreachable);
+    delete_garbage(tstate, gcstate);
 
     if (reason == GC_REASON_MANUAL) {
         // Clear this thread's freelists again after deleting garbage
