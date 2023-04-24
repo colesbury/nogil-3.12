@@ -2304,6 +2304,8 @@ _PyTrash_thread_deposit_object(PyObject *op)
     _PyObject_ASSERT(op, _PyObject_IS_GC(op));
     _PyObject_ASSERT(op, !_PyObject_GC_IS_TRACKED(op));
     _PyObject_ASSERT(op, Py_REFCNT(op) == 0);
+    _PyObject_ASSERT(op, op->ob_tid == 0);
+    op->ob_tid = (uintptr_t)tstate->trash_delete_later;
     _PyGCHead_SET_PREV(_Py_AS_GC(op), (PyGC_Head*)tstate->trash_delete_later);
     tstate->trash_delete_later = op;
 }

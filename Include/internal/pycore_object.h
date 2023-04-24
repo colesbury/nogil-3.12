@@ -166,6 +166,7 @@ static inline void _PyObject_GC_UNTRACK(
                           filename, lineno, __func__);
 
     PyGC_Head *gc = _Py_AS_GC(op);
+    assert(gc->_gc_next == 0);
     if (gc->_gc_next != 0) {
         PyGC_Head *prev = _PyGCHead_PREV(gc);
         PyGC_Head *next = _PyGCHead_NEXT(gc);

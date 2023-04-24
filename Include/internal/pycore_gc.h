@@ -61,6 +61,15 @@ static inline void check_is_tracked(PyObject *op) {
     assert(tracked1 == tracked2);
 }
 
+static inline void check_is_finalized(PyObject *op) {
+    PyGC_Head *gc = _Py_AS_GC(op);
+
+    int finalized1 = ((gc->_gc_prev & _PyGC_PREV_MASK_FINALIZED) != 0);
+    int finalized2 = ((op->ob_gc_bits & _PyGC_MASK_FINALIZED) != 0);
+
+    assert(finalized1 == finalized2);
+}
+
 /* True if the object is currently tracked by the GC. */
 static inline int _PyObject_GC_IS_TRACKED(PyObject *op) {
     check_is_tracked(op);
@@ -101,20 +110,16 @@ static inline void _PyGCHead_SET_PREV(PyGC_Head *gc, PyGC_Head *prev) {
     gc->_gc_prev = ((gc->_gc_prev & ~_PyGC_PREV_MASK) | uprev);
 }
 
-static inline int _PyGCHead_FINALIZED(PyGC_Head *gc) {
-    return ((gc->_gc_prev & _PyGC_PREV_MASK_FINALIZED) != 0);
-}
-static inline void _PyGCHead_SET_FINALIZED(PyGC_Head *gc) {
-    gc->_gc_prev |= _PyGC_PREV_MASK_FINALIZED;
-}
-
 static inline int _PyGC_FINALIZED(PyObject *op) {
+    // return ((op->ob_gc_bits & _PyGC_MASK_FINALIZED) != 0);
+    check_is_finalized(op);
     PyGC_Head *gc = _Py_AS_GC(op);
-    return _PyGCHead_FINALIZED(gc);
+    return ((gc->_gc_prev & _PyGC_PREV_MASK_FINALIZED) != 0);
 }
 static inline void _PyGC_SET_FINALIZED(PyObject *op) {
     PyGC_Head *gc = _Py_AS_GC(op);
-    _PyGCHead_SET_FINALIZED(gc);
+    gc->_gc_prev |= _PyGC_PREV_MASK_FINALIZED;
+    op->ob_gc_bits |= _PyGC_MASK_FINALIZED;
 }
 
 
