@@ -84,6 +84,12 @@ gc_set_unreachable(PyObject *op)
     op->ob_gc_bits |= _PyGC_UNREACHABLE;
 }
 
+static void
+gc_clear_unreachable(PyObject *op)
+{
+    op->ob_gc_bits &= ~_PyGC_UNREACHABLE;
+}
+
 static inline int
 gc_is_unreachable(PyObject *op)
 {
@@ -109,6 +115,7 @@ gc_restore_tid(PyObject *op)
     }
     else if (segment->thread_id == 0) {
         merge_refcount(op, 0);
+        op->ob_tid = 0;
     }
     else {
         // NOTE: may change ob_tid
@@ -117,29 +124,37 @@ gc_restore_tid(PyObject *op)
     op->ob_gc_bits &= ~_PyGC_MASK_TID_REFCOUNT;
 }
 
+static void
+check_refs(PyGC_Head *g)
+{
+    PyObject *op = FROM_GC(g);
+    Py_ssize_t refs1 = (Py_ssize_t)op->ob_tid;
+    Py_ssize_t refs2 = ((Py_ssize_t)g->_gc_prev) >> _PyGC_PREV_SHIFT;
+    assert(refs1 == refs2);
+}
+
 static inline Py_ssize_t
 gc_get_refs(PyGC_Head *g)
 {
+    check_refs(g);
     return ((Py_ssize_t)g->_gc_prev) >> _PyGC_PREV_SHIFT;
-}
-
-static inline void
-gc_set_refs(PyGC_Head *g, Py_ssize_t refs)
-{
-    g->_gc_prev = (g->_gc_prev & ~_PyGC_PREV_MASK)
-        | ((uintptr_t)(refs) << _PyGC_PREV_SHIFT);
 }
 
 static inline void
 gc_add_refs(PyGC_Head *g, Py_ssize_t refs)
 {
     g->_gc_prev += (refs << _PyGC_PREV_SHIFT);
+    assert(_PyGC_TRACKED(g));
+    PyObject *op = FROM_GC(g);
+    gc_use_tid_as_refcount(op);
+    op->ob_tid += refs;
+    check_refs(g);
 }
 
 static inline void
 gc_decref(PyGC_Head *g)
 {
-    g->_gc_prev -= 1 << _PyGC_PREV_SHIFT;
+    gc_add_refs(g, -1);
 }
 
 /* set for debugging information */
@@ -487,6 +502,8 @@ static int
 validate_refcount_visitor(PyGC_Head* gc, void *arg)
 {
     assert(_Py_GC_REFCNT(FROM_GC(gc)) > 0);
+    PyObject *op = FROM_GC(gc);
+    assert((op->ob_gc_bits & _PyGC_MASK_TID_REFCOUNT) == 0);
     return 0;
 }
 
@@ -605,7 +622,6 @@ merge_refcount(PyObject *op, Py_ssize_t extra)
     _Py_IncRefTotalN(extra);
 #endif
 
-    op->ob_tid = 0;
     op->ob_ref_local = 0;
     op->ob_ref_shared = _Py_REF_PACK_SHARED(refcount, _Py_REF_MERGED);
 }
@@ -647,6 +663,9 @@ update_refs(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size
         _PyTuple_MaybeUntrack(op);
         if (!_PyObject_GC_IS_TRACKED(op)) {
             gc->_gc_prev &= ~_PyGC_PREV_MASK_FINALIZED;
+            if ((op->ob_gc_bits & _PyGC_MASK_TID_REFCOUNT)) {
+                gc_restore_tid(op);
+            }
             return true;
         }
     }
@@ -654,6 +673,9 @@ update_refs(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size
         _PyDict_MaybeUntrack(op);
         if (!_PyObject_GC_IS_TRACKED(op)) {
             gc->_gc_prev &= ~_PyGC_PREV_MASK_FINALIZED;
+            if ((op->ob_gc_bits & _PyGC_MASK_TID_REFCOUNT)) {
+                gc_restore_tid(op);
+            }
             return true;
         }
     }
@@ -719,23 +741,12 @@ has_legacy_finalizer(PyObject *op)
     return Py_TYPE(op)->tp_del != NULL;
 }
 
-static inline void
-clear_unreachable_mask(PyGC_Head *unreachable)
-{
-    /* Check that the list head does not have the unreachable bit set */
-    PyGC_Head *gc, *next;
-    for (gc = GC_NEXT(unreachable); gc != unreachable; gc = next) {
-        gc->_gc_prev &= ~_PyGC_PREV_MASK_UNREACHABLE;
-        next = (PyGC_Head*)gc->_gc_next;
-    }
-    // validate_list(unreachable, unreachable_clear);
-}
-
 /* Adds one to the refcount and merges the local and shared fields. */
 static void
 incref_merge(PyObject *op)
 {
     merge_refcount(op, 1);
+    op->ob_tid = 0;
 }
 
 static void
@@ -955,8 +966,9 @@ finalize_garbage(PyThreadState *tstate, GCState *gcstate)
             PyGC_Head *gc = AS_GC(op);
             destructor finalize;
 
-            if (!_PyGCHead_FINALIZED(gc) &&
+            if (!_PyGC_FINALIZED(op) &&
                     (finalize = Py_TYPE(op)->tp_finalize) != NULL) {
+                _PyGC_SET_FINALIZED(op);
                 _PyGCHead_SET_FINALIZED(gc);
                 finalize(op);
                 assert(!_PyErr_Occurred(tstate));
@@ -1042,6 +1054,7 @@ visit_reachable_heap(PyObject *op, GCState *gcstate)
             op->ob_gc_bits -= _PyGC_UNREACHABLE;
             PyGC_Head *gc = AS_GC(op);
             gc->_gc_prev &= ~_PyGC_PREV_MASK;
+            op->ob_tid = 0;
             _PyObjectQueue_Push(&gcstate->gc_work, op);
         }
     }
@@ -1130,6 +1143,20 @@ scan_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
     return true;
 }
 
+static void
+reverse_queue(_PyObjectQueue **queue)
+{
+    _PyObjectQueue *prev = NULL;
+    _PyObjectQueue *cur = *queue;
+    while (cur) {
+        _PyObjectQueue *next = cur->prev;
+        cur->prev = prev;
+        prev = cur;
+        cur = next;
+    }
+    *queue = prev;
+}
+
 static inline void
 deduce_unreachable_heap(GCState *gcstate) {
     visit_heaps2(mi_heap_tag_gc, mark_heap_visitor, gcstate);
@@ -1138,15 +1165,7 @@ deduce_unreachable_heap(GCState *gcstate) {
 
     // reverse the unreachable queue ordering to better match
     // the order in which objects are allocated (not guaranteed!)
-    _PyObjectQueue *prev = NULL;
-    _PyObjectQueue *cur = gcstate->gc_unreachable;
-    while (cur) {
-        _PyObjectQueue *next = cur->prev;
-        cur->prev = prev;
-        prev = cur;
-        cur = next;
-    }
-    gcstate->gc_unreachable = prev;
+    reverse_queue(&gcstate->gc_unreachable);
 
     /* Clear weakrefs and enqueue callbacks. */
     clear_weakrefs(gcstate);
@@ -1188,7 +1207,13 @@ handle_resurrected_objects(GCState *gcstate)
         for (Py_ssize_t i = 0, n = q->n; i != n; i++) {
             PyObject *op = q->objs[i];
             assert(gc_is_unreachable(op));
-            
+
+            if (!_PyObject_GC_IS_TRACKED(op)) {
+                // The finalizer may have untracked this object.
+                gc_clear_unreachable(op);
+                continue;
+            }
+
             Py_ssize_t refcnt = _Py_GC_REFCNT(op);
             _PyObject_ASSERT(op, refcnt > 0);
             gc_use_tid_as_refcount(op);
@@ -1210,6 +1235,12 @@ handle_resurrected_objects(GCState *gcstate)
             PyGC_Head *gc = AS_GC(op);
             const Py_ssize_t gc_refs = gc_get_refs(gc);
             assert(gc_refs >= 0);
+
+            if (!_PyObject_GC_IS_TRACKED(op)) {
+                // TODO remove this in favor of unreachable check below
+                continue;
+            }
+
             gc_restore_tid(op);
             if (gc_refs == 0 || !gc_is_unreachable(op)) {
                 continue;
@@ -1325,6 +1356,8 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     assert(split_keys_marked == split_keys_unmarked);
 
     deduce_unreachable_heap(gcstate);
+
+    validate_refcount();
 
     /* Restart the world to call weakrefs and finalizers */
     _PyRuntimeState_StartTheWorld(&_PyRuntime);
