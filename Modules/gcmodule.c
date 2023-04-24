@@ -963,13 +963,11 @@ finalize_garbage(PyThreadState *tstate, GCState *gcstate)
     while (q != NULL) {
         for (Py_ssize_t i = 0, n = q->n; i != n; i++) {
             PyObject *op = q->objs[i];
-            PyGC_Head *gc = AS_GC(op);
             destructor finalize;
 
             if (!_PyGC_FINALIZED(op) &&
                     (finalize = Py_TYPE(op)->tp_finalize) != NULL) {
                 _PyGC_SET_FINALIZED(op);
-                _PyGCHead_SET_FINALIZED(gc);
                 finalize(op);
                 assert(!_PyErr_Occurred(tstate));
             }
@@ -1913,7 +1911,7 @@ static PyObject *
 gc_is_finalized(PyObject *module, PyObject *obj)
 /*[clinic end generated code: output=e1516ac119a918ed input=201d0c58f69ae390]*/
 {
-    if (_PyObject_IS_GC(obj) && _PyGCHead_FINALIZED(AS_GC(obj))) {
+    if (_PyObject_IS_GC(obj) && _PyGC_FINALIZED(obj)) {
          Py_RETURN_TRUE;
     }
     Py_RETURN_FALSE;
@@ -2349,7 +2347,7 @@ PyObject_GC_IsTracked(PyObject* obj)
 int
 PyObject_GC_IsFinalized(PyObject *obj)
 {
-    if (_PyObject_IS_GC(obj) && _PyGCHead_FINALIZED(AS_GC(obj))) {
+    if (_PyObject_IS_GC(obj) && _PyGC_FINALIZED(obj)) {
          return 1;
     }
     return 0;
