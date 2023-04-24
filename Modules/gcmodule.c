@@ -59,8 +59,6 @@ module gc
 /* Get the object given the GC head */
 #define FROM_GC(g) ((PyObject *)(((char *)(g))-PyGC_Head_OFFSET))
 
-#define _PyGC_TRACKED(g) (((g)->_gc_prev & _PyGC_PREV_MASK_TRACKED) != 0)
-
 typedef enum {
     /* GC was triggered by heap allocation */
     GC_REASON_HEAP,
@@ -122,19 +120,19 @@ gc_restore_tid(PyObject *op)
 }
 
 static void
-check_refs(PyGC_Head *g)
+check_refs(PyObject *op)
 {
-    PyObject *op = FROM_GC(g);
+    PyGC_Head *g = AS_GC(op);
     Py_ssize_t refs1 = (Py_ssize_t)op->ob_tid;
     Py_ssize_t refs2 = ((Py_ssize_t)g->_gc_prev) >> _PyGC_PREV_SHIFT;
     assert(refs1 == refs2);
 }
 
 static inline Py_ssize_t
-gc_get_refs(PyGC_Head *g)
+gc_get_refs(PyObject *op)
 {
-    check_refs(g);
-    return ((Py_ssize_t)g->_gc_prev) >> _PyGC_PREV_SHIFT;
+    check_refs(op);
+    return (Py_ssize_t)op->ob_tid;
 }
 
 static inline void
@@ -147,7 +145,7 @@ gc_add_refs(PyObject *op, Py_ssize_t refs)
     PyGC_Head *g = AS_GC(op);
     g->_gc_prev += (refs << _PyGC_PREV_SHIFT);
 
-    check_refs(g);
+    check_refs(op);
 }
 
 static inline void
@@ -894,8 +892,7 @@ mark_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
 
     GCState *gcstate = (GCState *)args;
 
-    PyGC_Head *gc = AS_GC(op);
-    if (!gc_get_refs(gc)) {
+    if (!gc_get_refs(op)) {
         return true;
     }
 
@@ -911,9 +908,10 @@ mark_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
         * so we have to wait until it returns to determine
         * the next object to visit.
         */
-    _PyObject_ASSERT_WITH_MSG(op, gc_get_refs(gc) > 0,
+    _PyObject_ASSERT_WITH_MSG(op, gc_get_refs(op) > 0,
                                     "refcount is too small");
     op->ob_gc_bits -= _PyGC_UNREACHABLE;
+    PyGC_Head *gc = AS_GC(op);
     gc->_gc_prev &= ~_PyGC_PREV_MASK;
     do {
         traverseproc traverse = Py_TYPE(op)->tp_traverse;
@@ -1010,14 +1008,16 @@ handle_resurrected_objects(GCState *gcstate)
     _PyObjectQueue *q;
 
     q = gcstate->gc_unreachable;
+
+#ifdef Py_DEBUG
     while (q != NULL) {
         for (Py_ssize_t i = 0, n = q->n; i != n; i++) {
             PyObject *op = q->objs[i];
-            PyGC_Head *gc = AS_GC(op);
-            assert(gc_get_refs(gc) == 0);
+            assert(gc_get_refs(op) == 0);
         }
         q = q->prev;
     }
+#endif
 
     // First reset the reference count for unreachable objects. Subtract one
     // from the reference count to account for the refcount increment due
@@ -1052,8 +1052,7 @@ handle_resurrected_objects(GCState *gcstate)
     while (q != NULL) {
         for (Py_ssize_t i = 0, n = q->n; i != n; i++) {
             PyObject *op = q->objs[i];
-            PyGC_Head *gc = AS_GC(op);
-            const Py_ssize_t gc_refs = gc_get_refs(gc);
+            const Py_ssize_t gc_refs = gc_get_refs(op);
             assert(gc_refs >= 0);
 
             if (!_PyObject_GC_IS_TRACKED(op)) {
@@ -1066,6 +1065,7 @@ handle_resurrected_objects(GCState *gcstate)
                 continue;
             }
             op->ob_gc_bits -= _PyGC_UNREACHABLE;
+            PyGC_Head *gc = AS_GC(op);
             gc->_gc_prev &= ~_PyGC_PREV_MASK;
             do {
                 traverseproc traverse = Py_TYPE(op)->tp_traverse;
