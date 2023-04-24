@@ -119,19 +119,9 @@ gc_restore_tid(PyObject *op)
     op->ob_gc_bits &= ~_PyGC_MASK_TID_REFCOUNT;
 }
 
-static void
-check_refs(PyObject *op)
-{
-    PyGC_Head *g = AS_GC(op);
-    Py_ssize_t refs1 = (Py_ssize_t)op->ob_tid;
-    Py_ssize_t refs2 = ((Py_ssize_t)g->_gc_prev) >> _PyGC_PREV_SHIFT;
-    assert(refs1 == refs2);
-}
-
 static inline Py_ssize_t
 gc_get_refs(PyObject *op)
 {
-    check_refs(op);
     return (Py_ssize_t)op->ob_tid;
 }
 
@@ -141,11 +131,6 @@ gc_add_refs(PyObject *op, Py_ssize_t refs)
     assert(_PyObject_GC_IS_TRACKED(op));
     gc_use_tid_as_refcount(op);
     op->ob_tid += refs;
-
-    PyGC_Head *g = AS_GC(op);
-    g->_gc_prev += (refs << _PyGC_PREV_SHIFT);
-
-    check_refs(op);
 }
 
 static inline void
@@ -372,8 +357,6 @@ reset_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* bloc
         return true;
     }
     op->ob_gc_bits = 0;
-    PyGC_Head *gc = AS_GC(op);
-    gc->_gc_prev = 0;
     return true;
 }
 
@@ -480,11 +463,9 @@ update_refs(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size
         return true;
     };
 
-    PyGC_Head *gc = AS_GC(op);
     if (PyTuple_CheckExact(op)) {
         _PyTuple_MaybeUntrack(op);
         if (!_PyObject_GC_IS_TRACKED(op)) {
-            gc->_gc_prev &= ~_PyGC_PREV_MASK_FINALIZED;
             if ((op->ob_gc_bits & _PyGC_MASK_TID_REFCOUNT)) {
                 gc_restore_tid(op);
             }
@@ -494,7 +475,6 @@ update_refs(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size
     else if (PyDict_CheckExact(op)) {
         _PyDict_MaybeUntrack(op);
         if (!_PyObject_GC_IS_TRACKED(op)) {
-            gc->_gc_prev &= ~_PyGC_PREV_MASK_FINALIZED;
             if ((op->ob_gc_bits & _PyGC_MASK_TID_REFCOUNT)) {
                 gc_restore_tid(op);
             }
@@ -871,10 +851,7 @@ visit_reachable_heap(PyObject *op, GCState *gcstate)
     if (_PyObject_IS_GC(op) && _PyObject_GC_IS_TRACKED(op)) {
         if (gc_is_unreachable(op)) {
             op->ob_gc_bits -= _PyGC_UNREACHABLE;
-            op->ob_tid = 0;
-
-            PyGC_Head *gc = AS_GC(op);
-            gc->_gc_prev &= ~_PyGC_PREV_MASK;
+            op->ob_tid = 0;  // set gc refcount to zero
 
             _PyObjectQueue_Push(&gcstate->gc_work, op);
         }
@@ -911,8 +888,6 @@ mark_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
     _PyObject_ASSERT_WITH_MSG(op, gc_get_refs(op) > 0,
                                     "refcount is too small");
     op->ob_gc_bits -= _PyGC_UNREACHABLE;
-    PyGC_Head *gc = AS_GC(op);
-    gc->_gc_prev &= ~_PyGC_PREV_MASK;
     do {
         traverseproc traverse = Py_TYPE(op)->tp_traverse;
         (void) traverse(op,
@@ -1065,8 +1040,6 @@ handle_resurrected_objects(GCState *gcstate)
                 continue;
             }
             op->ob_gc_bits -= _PyGC_UNREACHABLE;
-            PyGC_Head *gc = AS_GC(op);
-            gc->_gc_prev &= ~_PyGC_PREV_MASK;
             do {
                 traverseproc traverse = Py_TYPE(op)->tp_traverse;
                 (void) traverse(op,
@@ -1969,17 +1942,6 @@ _PyGC_DumpShutdownStats(PyInterpreterState *interp)
 static void
 gc_fini_untrack(GCState *gcstate)
 {
-    // PyGC_Head *gc;
-    // for (gc = GC_NEXT(list); gc != list; gc = GC_NEXT(list)) {
-    //     PyObject *op = FROM_GC(gc);
-    //     _PyObject_GC_UNTRACK(op);
-    //     // gh-92036: If a deallocator function expect the object to be tracked
-    //     // by the GC (ex: func_dealloc()), it can crash if called on an object
-    //     // which is no longer tracked by the GC. Leak one strong reference on
-    //     // purpose so the object is never deleted and its deallocator is not
-    //     // called.
-    //     Py_INCREF(op);
-    // }
 }
 
 
@@ -1998,13 +1960,6 @@ _PyGC_Fini(PyInterpreterState *interp)
         // pointer.
         gc_fini_untrack(gcstate);
     }
-}
-
-/* for debugging */
-void
-_PyGC_Dump(PyGC_Head *g)
-{
-    _PyObject_Dump(FROM_GC(g));
 }
 
 

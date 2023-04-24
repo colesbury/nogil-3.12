@@ -54,16 +54,8 @@ static inline PyGC_Head* _Py_AS_GC(PyObject *op) {
     return _Py_STATIC_CAST(PyGC_Head*, mem + PyGC_Head_OFFSET);
 }
 
-static inline void check_is_tracked(PyObject *op) {
-    PyGC_Head *gc = _Py_AS_GC(op);
-    int tracked1 = (gc->_gc_prev & _PyGC_PREV_MASK_TRACKED) != 0;
-    int tracked2 = (op->ob_gc_bits & _PyGC_MASK_TRACKED) != 0;
-    assert(tracked1 == tracked2);
-}
-
 /* True if the object is currently tracked by the GC. */
 static inline int _PyObject_GC_IS_TRACKED(PyObject *op) {
-    check_is_tracked(op);
     return (op->ob_gc_bits & _PyGC_MASK_TRACKED) != 0;
 }
 #define _PyObject_GC_IS_TRACKED(op) _PyObject_GC_IS_TRACKED(_Py_CAST(PyObject*, op))

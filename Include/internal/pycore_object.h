@@ -134,9 +134,6 @@ static inline void _PyObject_GC_TRACK(
     _PyObject_ASSERT_FROM(op, !_PyObject_GC_IS_TRACKED(op),
                           "object already tracked by the garbage collector",
                           filename, lineno, __func__);
-
-    PyGC_Head *gc = _Py_AS_GC(op);
-    gc->_gc_prev |= _PyGC_PREV_MASK_TRACKED;
     op->ob_gc_bits |= _PyGC_MASK_TRACKED;
 }
 
@@ -161,9 +158,6 @@ static inline void _PyObject_GC_UNTRACK(
                           "object not tracked by the garbage collector",
                           filename, lineno, __func__);
 
-    PyGC_Head *gc = _Py_AS_GC(op);
-    assert(gc->_gc_next == 0);
-    gc->_gc_prev &= _PyGC_PREV_MASK_FINALIZED;
     op->ob_gc_bits &= ~_PyGC_MASK_TRACKED;
 }
 
