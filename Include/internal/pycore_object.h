@@ -122,10 +122,6 @@ _PyObject_InitVar(PyVarObject *op, PyTypeObject *typeobj, Py_ssize_t size)
  * NB: While the object is tracked by the collector, it must be safe to call the
  * ob_traverse method.
  *
- * Internal note: interp->gc.generation0->_gc_prev doesn't have any bit flags
- * because it's not object header.  So we don't use _PyGCHead_PREV() and
- * _PyGCHead_SET_PREV() for it to avoid unnecessary bitwise operations.
- *
  * See also the public PyObject_GC_Track() function.
  */
 static inline void _PyObject_GC_TRACK(
@@ -167,16 +163,6 @@ static inline void _PyObject_GC_UNTRACK(
 
     PyGC_Head *gc = _Py_AS_GC(op);
     assert(gc->_gc_next == 0);
-    if (gc->_gc_next != 0) {
-        PyGC_Head *prev = _PyGCHead_PREV(gc);
-        PyGC_Head *next = _PyGCHead_NEXT(gc);
-
-        _PyGCHead_SET_NEXT(prev, next);
-        _PyGCHead_SET_PREV(next, prev);
-
-        gc->_gc_next = 0;
-    }
-
     gc->_gc_prev &= _PyGC_PREV_MASK_FINALIZED;
     op->ob_gc_bits &= ~_PyGC_MASK_TRACKED;
 }

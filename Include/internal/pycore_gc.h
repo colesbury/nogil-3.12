@@ -104,17 +104,11 @@ static inline PyGC_Head* _PyGCHead_PREV(PyGC_Head *gc) {
     uintptr_t prev = (gc->_gc_prev & _PyGC_PREV_MASK);
     return _Py_CAST(PyGC_Head*, prev);
 }
-static inline void _PyGCHead_SET_PREV(PyGC_Head *gc, PyGC_Head *prev) {
-    uintptr_t uprev = _Py_CAST(uintptr_t, prev);
-    assert((uprev & ~_PyGC_PREV_MASK) == 0);
-    gc->_gc_prev = ((gc->_gc_prev & ~_PyGC_PREV_MASK) | uprev);
-}
 
 static inline int _PyGC_FINALIZED(PyObject *op) {
     // return ((op->ob_gc_bits & _PyGC_MASK_FINALIZED) != 0);
     check_is_finalized(op);
-    PyGC_Head *gc = _Py_AS_GC(op);
-    return ((gc->_gc_prev & _PyGC_PREV_MASK_FINALIZED) != 0);
+    return ((op->ob_gc_bits & _PyGC_MASK_FINALIZED) != 0);
 }
 static inline void _PyGC_SET_FINALIZED(PyObject *op) {
     PyGC_Head *gc = _Py_AS_GC(op);

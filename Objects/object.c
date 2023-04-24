@@ -2306,7 +2306,6 @@ _PyTrash_thread_deposit_object(PyObject *op)
     _PyObject_ASSERT(op, Py_REFCNT(op) == 0);
     _PyObject_ASSERT(op, op->ob_tid == 0);
     op->ob_tid = (uintptr_t)tstate->trash_delete_later;
-    _PyGCHead_SET_PREV(_Py_AS_GC(op), (PyGC_Head*)tstate->trash_delete_later);
     tstate->trash_delete_later = op;
 }
 
@@ -2333,9 +2332,8 @@ _PyTrash_thread_destroy_chain(void)
         PyObject *op = tstate->trash_delete_later;
         destructor dealloc = Py_TYPE(op)->tp_dealloc;
 
-        tstate->trash_delete_later =
-            (PyObject*) _PyGCHead_PREV(_Py_AS_GC(op));
-        _PyGCHead_SET_PREV(_Py_AS_GC(op), NULL);
+        tstate->trash_delete_later = (PyObject *)op->ob_tid;
+        op->ob_tid = 0;
 
         /* Call the deallocator directly.  This used to try to
          * fool Py_DECREF into calling it indirectly, but
