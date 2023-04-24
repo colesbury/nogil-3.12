@@ -53,9 +53,6 @@ module gc
 #  define GC_DEBUG
 #endif
 
-#define GC_NEXT _PyGCHead_NEXT
-#define GC_PREV _PyGCHead_PREV
-
 /* Get an object's GC head */
 #define AS_GC(o) ((PyGC_Head *)(((char *)(o))+PyGC_Head_OFFSET))
 
@@ -141,20 +138,22 @@ gc_get_refs(PyGC_Head *g)
 }
 
 static inline void
-gc_add_refs(PyGC_Head *g, Py_ssize_t refs)
+gc_add_refs(PyObject *op, Py_ssize_t refs)
 {
-    g->_gc_prev += (refs << _PyGC_PREV_SHIFT);
-    assert(_PyGC_TRACKED(g));
-    PyObject *op = FROM_GC(g);
+    assert(_PyObject_GC_IS_TRACKED(op));
     gc_use_tid_as_refcount(op);
     op->ob_tid += refs;
+
+    PyGC_Head *g = AS_GC(op);
+    g->_gc_prev += (refs << _PyGC_PREV_SHIFT);
+
     check_refs(g);
 }
 
 static inline void
-gc_decref(PyGC_Head *g)
+gc_decref(PyObject *op)
 {
-    gc_add_refs(g, -1);
+    gc_add_refs(op, -1);
 }
 
 /* set for debugging information */
@@ -223,8 +222,6 @@ _Py_GC_REFCNT(PyObject *op)
 
     return local + shared - deferred;
 }
-
-typedef int (gc_visit_fn)(PyGC_Head* gc, void *arg);
 
 struct debug_visitor_args {
     mi_block_visit_fun *visitor;
@@ -389,12 +386,8 @@ _PyGC_ResetHeap(void)
 static int
 visit_decref(PyObject *op, void *arg)
 {
-    if (_PyObject_IS_GC(op)) {
-        PyGC_Head *gc = AS_GC(op);
-        // We're only interested in gc_refs for tracked objects.
-        if (_PyGC_TRACKED(gc)) {
-            gc_decref(gc);
-        }
+    if (_PyObject_IS_GC(op) && _PyObject_GC_IS_TRACKED(op)) {
+        gc_decref(op);
     }
     return 0;
 }
@@ -519,7 +512,7 @@ update_refs(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size
     _PyObject_ASSERT(op, refcount >= 0);
 
     gc_use_tid_as_refcount(op);
-    gc_add_refs(gc, refcount);
+    gc_add_refs(op, refcount);
     gc_set_unreachable(op);
 
     // Subtract internal references from gc_refs. Objects with gc_refs > 0
@@ -547,13 +540,12 @@ visit_decref_unreachable(PyObject *op, void *data)
 {
     assert(op != NULL);
     if (PyObject_IS_GC(op)) {
-        PyGC_Head *gc = AS_GC(op);
         /* We're only interested in gc_refs for objects in the
          * generation being collected, which can be recognized
          * because only they have positive gc_refs.
          */
         if (gc_is_unreachable(op)) {
-            gc_decref(gc);
+            gc_decref(op);
         }
     }
     return 0;
@@ -1042,7 +1034,7 @@ handle_resurrected_objects(GCState *gcstate)
             Py_ssize_t refcnt = _Py_GC_REFCNT(op);
             _PyObject_ASSERT(op, refcnt > 0);
             gc_use_tid_as_refcount(op);
-            gc_add_refs(AS_GC(op), refcnt - 1);
+            gc_add_refs(op, refcnt - 1);
 
             traverseproc traverse = Py_TYPE(op)->tp_traverse;
             (void) traverse(op,
