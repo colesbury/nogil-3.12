@@ -42,6 +42,8 @@ typedef struct {
 
 /* Bit 0 is set if the object is tracked by the GC */
 #define _PyGC_MASK_TRACKED     (1)
+/* Bit 1 is set when tp_finalize is called */
+#define _PyGC_MASK_FINALIZED   (2)
 /* Bit 2 is set when the object is not currently reachable */
 #define _PyGC_UNREACHABLE      (4)
 /* Bit 3 is set when the ob_tid stores the refcount */

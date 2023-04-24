@@ -141,6 +141,7 @@ static inline void _PyObject_GC_TRACK(
 
     PyGC_Head *gc = _Py_AS_GC(op);
     gc->_gc_prev |= _PyGC_PREV_MASK_TRACKED;
+    op->ob_gc_bits |= _PyGC_MASK_TRACKED;
 }
 
 /* Tell the GC to stop tracking this object.
@@ -176,6 +177,7 @@ static inline void _PyObject_GC_UNTRACK(
     }
 
     gc->_gc_prev &= _PyGC_PREV_MASK_FINALIZED;
+    op->ob_gc_bits &= ~_PyGC_MASK_TRACKED;
 }
 
 // Macros to accept any type for the parameter, and to automatically pass

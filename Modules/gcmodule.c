@@ -167,9 +167,6 @@ gc_decref(PyGC_Head *g)
                 DEBUG_SAVEALL
 
 
-static inline void gc_list_init(PyGC_Head *list);
-
-
 static GCState *
 get_gc_state(void)
 {
@@ -212,73 +209,7 @@ _PyGC_Init(PyInterpreterState *interp)
 }
 
 
-/*
-_gc_prev values
----------------
-
-Between collections, _gc_prev is used for doubly linked list.
-
-Lowest two bits of _gc_prev are used for flags.
-PREV_MASK_COLLECTING is used only while collecting and cleared before GC ends
-or _PyObject_GC_UNTRACK() is called.
-
-During a collection, _gc_prev is temporary used for gc_refs, and the gc list
-is singly linked until _gc_prev is restored.
-
-gc_refs
-    At the start of a collection, update_refs() copies the true refcount
-    to gc_refs, for each object in the generation being collected.
-    subtract_refs() then adjusts gc_refs so that it equals the number of
-    times an object is referenced directly from outside the generation
-    being collected.
-
-PREV_MASK_COLLECTING
-    Objects in generation being collected are marked PREV_MASK_COLLECTING in
-    update_refs().
-
-
-_gc_next values
----------------
-
-_gc_next takes these values:
-
-0
-    The object is not tracked
-
-!= 0
-    Pointer to the next object in the GC list.
-    Additionally, lowest bit is used temporary for
-    NEXT_MASK_UNREACHABLE flag described below.
-
-NEXT_MASK_UNREACHABLE
-    move_unreachable() then moves objects not reachable (whether directly or
-    indirectly) from outside the generation into an "unreachable" set and
-    set this flag.
-
-    Objects that are found to be reachable have gc_refs set to 1.
-    When this flag is set for the reachable object, the object must be in
-    "unreachable" set.
-    The flag is unset and the object is moved back to "reachable" set.
-
-    move_legacy_finalizers() will remove this flag from "unreachable" set.
-*/
-
 /*** list functions ***/
-
-static inline void
-gc_list_init(PyGC_Head *list)
-{
-    // List header must not have flags.
-    // We can assign pointer by simple cast.
-    list->_gc_prev = (uintptr_t)list;
-    list->_gc_next = (uintptr_t)list;
-}
-
-static inline int
-gc_list_is_empty(PyGC_Head *list)
-{
-    return (list->_gc_next == (uintptr_t)list);
-}
 
 static Py_ssize_t
 _Py_GC_REFCNT(PyObject *op)
@@ -905,7 +836,7 @@ delete_garbage(PyThreadState *tstate, GCState *gcstate)
                 }
             }
         }
-        assert(op->ob_gc_bits == 0);
+        assert((op->ob_gc_bits & ~(_PyGC_MASK_TRACKED|_PyGC_MASK_FINALIZED)) == 0);
         Py_DECREF(op);
     }
 }
@@ -944,9 +875,11 @@ visit_reachable_heap(PyObject *op, GCState *gcstate)
     if (_PyObject_IS_GC(op) && _PyObject_GC_IS_TRACKED(op)) {
         if (gc_is_unreachable(op)) {
             op->ob_gc_bits -= _PyGC_UNREACHABLE;
+            op->ob_tid = 0;
+
             PyGC_Head *gc = AS_GC(op);
             gc->_gc_prev &= ~_PyGC_PREV_MASK;
-            op->ob_tid = 0;
+
             _PyObjectQueue_Push(&gcstate->gc_work, op);
         }
     }
