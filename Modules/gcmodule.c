@@ -53,12 +53,6 @@ module gc
 #  define GC_DEBUG
 #endif
 
-/* Get an object's GC head */
-#define AS_GC(o) ((PyGC_Head *)(((char *)(o))+PyGC_Head_OFFSET))
-
-/* Get the object given the GC head */
-#define FROM_GC(g) ((PyObject *)(((char *)(g))-PyGC_Head_OFFSET))
-
 typedef enum {
     /* GC was triggered by heap allocation */
     GC_REASON_HEAP,
@@ -327,11 +321,7 @@ validate_tracked_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void
     struct validate_tracked_args *arg = (struct validate_tracked_args*)void_arg;
     PyObject *op = (PyObject *)block;
     if (_PyObject_GC_IS_TRACKED(op)) {
-        PyGC_Head *gc = AS_GC(op);
-        assert((gc->_gc_prev & arg->mask) == arg->expected);
-        assert(gc->_gc_next == 0);
-        assert(_PyGCHead_PREV(gc) == NULL);
-        assert(_Py_GC_REFCNT(FROM_GC(gc)) >= 0);
+        assert(_Py_GC_REFCNT(op) >= 0);
     }
     return true;
 }
