@@ -1045,21 +1045,21 @@ void *
 _PyGC_Malloc(void *ctx, size_t nbytes)
 {
     PyThreadState *tstate = _PyThreadState_GET();
-    return mi_heap_malloc(&tstate->heaps[mi_heap_tag_gc], nbytes);
+    return mi_heap_malloc(tstate->curheap, nbytes);
 }
 
 void *
 _PyGC_Calloc(void *ctx, size_t nelem, size_t elsize)
 {
     PyThreadState *tstate = _PyThreadState_GET();
-    return mi_heap_calloc(&tstate->heaps[mi_heap_tag_gc], nelem, elsize);
+    return mi_heap_calloc(tstate->curheap, nelem, elsize);
 }
 
 void *
 _PyGC_Realloc(void *ctx, void *ptr, size_t nbytes)
 {
     PyThreadState *tstate = _PyThreadState_GET();
-    return mi_heap_realloc(&tstate->heaps[mi_heap_tag_gc], ptr, nbytes);
+    return mi_heap_realloc(tstate->curheap, ptr, nbytes);
 }
 
 /*==========================================================================*/

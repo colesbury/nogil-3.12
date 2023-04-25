@@ -124,6 +124,7 @@ struct _ts {
     uintptr_t eval_breaker;
 
     mi_heap_t *heaps;
+    mi_heap_t *curheap;
 
     Py_ssize_t refcount;
 

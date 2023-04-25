@@ -2002,11 +2002,20 @@ gc_alloc(size_t basicsize, size_t presize)
         return _PyErr_NoMemory(tstate);
     }
     size_t size = presize + basicsize;
+    if (presize != 0) {
+        tstate->curheap = &tstate->heaps[mi_heap_tag_gc_pre];
+    }
+    else {
+        tstate->curheap = &tstate->heaps[mi_heap_tag_gc];
+    }
     PyMemAllocatorEx *a = &_PyRuntime.allocators.standard.gc;
     char *mem = a->malloc(a->ctx, size);
     if (mem == NULL) {
         return _PyErr_NoMemory(tstate);
     }
+#ifdef Py_DEBUG
+    tstate->curheap = NULL;
+#endif
     memset(mem, 0, presize);
     return (PyObject *)(mem + presize);
 }
@@ -2050,6 +2059,14 @@ _PyObject_GC_Resize(PyVarObject *op, Py_ssize_t nitems)
     _PyObject_ASSERT((PyObject *)op, !_PyObject_GC_IS_TRACKED(op));
     if (basicsize > (size_t)PY_SSIZE_T_MAX - presize) {
         return (PyVarObject *)PyErr_NoMemory();
+    }
+
+    PyThreadState *tstate = _PyThreadState_GET();
+    if (presize != 0) {
+        tstate->curheap = &tstate->heaps[mi_heap_tag_gc_pre];
+    }
+    else {
+        tstate->curheap = &tstate->heaps[mi_heap_tag_gc];
     }
 
     PyMemAllocatorEx *a = &_PyRuntime.allocators.standard.gc;
