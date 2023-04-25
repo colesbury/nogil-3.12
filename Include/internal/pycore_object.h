@@ -444,7 +444,7 @@ _PyObject_IS_GC(PyObject *obj)
 
 // Fast inlined version of PyType_IS_GC()
 #define _PyType_IS_GC(t) _PyType_HasFeature((t), Py_TPFLAGS_HAVE_GC)
-#define _PyGC_PREHEADER_SIZE (sizeof(PyGC_Head) + 2 * sizeof(PyObject *))
+#define _PyGC_PREHEADER_SIZE (2 * sizeof(PyObject *))
 
 static inline size_t
 _PyType_PreHeaderSize(PyTypeObject *tp)

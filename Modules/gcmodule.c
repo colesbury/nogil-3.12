@@ -233,7 +233,7 @@ visit_heaps(mi_block_visit_fun *visitor, void *arg)
     struct visitor_wrapper_args wrapper_args;
     wrapper_args.visitor = visitor;
     wrapper_args.arg = arg;
-    wrapper_args.offset = sizeof(PyGC_Head) + 2 * sizeof(void *);
+    wrapper_args.offset = 2 * sizeof(void *);
     if (_PyMem_DebugEnabled()) {
         wrapper_args.offset += 2 * sizeof(size_t);
     }
@@ -298,7 +298,7 @@ validate_refcount_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, voi
 {
     PyObject *op = (PyObject *)block;
     if (_PyObject_GC_IS_TRACKED(op)) {
-        assert(_Py_GC_REFCNT(op) > 0);
+        assert(_Py_GC_REFCNT(op) >= 0);
         assert((op->ob_gc_bits & _PyGC_MASK_TID_REFCOUNT) == 0);
     }
     return true;
@@ -309,34 +309,8 @@ validate_refcount(void)
 {
     visit_heaps(validate_refcount_visitor, NULL);
 }
-
-struct validate_tracked_args {
-    uintptr_t mask;
-    uintptr_t expected;
-};
-
-static bool
-validate_tracked_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* void_arg)
-{
-    struct validate_tracked_args *arg = (struct validate_tracked_args*)void_arg;
-    PyObject *op = (PyObject *)block;
-    if (_PyObject_GC_IS_TRACKED(op)) {
-        assert(_Py_GC_REFCNT(op) >= 0);
-    }
-    return true;
-}
-
-static void
-validate_tracked_heap(uintptr_t mask, uintptr_t expected)
-{
-    struct validate_tracked_args args;
-    args.mask = mask;
-    args.expected = expected;
-    visit_heaps(validate_tracked_visitor, &args);
-}
 #else
 #define validate_refcount() do{}while(0)
-#define validate_tracked_heap(x,y) do{}while(0)
 #endif
 
 static bool
@@ -1127,7 +1101,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
      * threads are resumed.
      */
     merge_queued_objects(&to_dealloc);
-    validate_tracked_heap(_PyGC_PREV_MASK|_PyGC_PREV_MASK_UNREACHABLE, 0);
+    validate_refcount();
 
     Py_ssize_t split_keys_marked = 0;
     find_gc_roots(gcstate, reason, &split_keys_marked);

@@ -22,7 +22,6 @@ typedef struct {
 } PyGC_Head;
 
 typedef struct {
-    PyGC_Head _gc_head;
     PyObject *_dict_or_values;
     PyObject *_weakref;
 } _PyGC_Preheader_UNUSED;
@@ -70,19 +69,6 @@ static inline int _PyObject_GC_MAY_BE_TRACKED(PyObject *obj) {
         return _PyObject_GC_IS_TRACKED(obj);
     }
     return 1;
-}
-
-// Lowest bit of _gc_next is used for flags only in GC.
-// But it is always 0 for normal code.
-static inline PyGC_Head* _PyGCHead_NEXT(PyGC_Head *gc) {
-    uintptr_t next = gc->_gc_next;
-    return _Py_CAST(PyGC_Head*, next);
-}
-
-// Lowest two bits of _gc_prev is used for _PyGC_PREV_MASK_* flags.
-static inline PyGC_Head* _PyGCHead_PREV(PyGC_Head *gc) {
-    uintptr_t prev = (gc->_gc_prev & _PyGC_PREV_MASK);
-    return _Py_CAST(PyGC_Head*, prev);
 }
 
 static inline int _PyGC_FINALIZED(PyObject *op) {
@@ -140,7 +126,6 @@ static inline void _PyGC_SET_FINALIZED(PyObject *op) {
 */
 
 struct gc_generation {
-    PyGC_Head head;
     int threshold; /* collection threshold */
     int count; /* count of allocations or collections of younger
                   generations */
