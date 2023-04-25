@@ -150,6 +150,7 @@ static int debug_offsets[MI_NUM_HEAPS] = {
   [mi_heap_tag_default] = 0,
   [mi_heap_tag_obj] = offsetof(PyObject, ob_type),
   [mi_heap_tag_gc] = 2 * sizeof(PyObject *) + offsetof(PyObject, ob_type),
+  [mi_heap_tag_gc_managed] = 2 * sizeof(PyObject *) + offsetof(PyObject, ob_type),
   [mi_heap_tag_list_array] = -1,
   [mi_heap_tag_dict_keys] = -1
 };

@@ -239,8 +239,9 @@ visit_heaps(mi_block_visit_fun *visitor, void *arg)
     }
 
     for_each_thread(t) {
-        mi_heap_t *heap = t->heaps[mi_heap_tag_gc];
-        if (heap && !heap->visited) {
+        if (!t->heaps) continue;
+        mi_heap_t *heap = &t->heaps[mi_heap_tag_gc];
+        if (!heap->visited) {
             if (!mi_heap_visit_blocks(heap, true, visitor_wrapper, &wrapper_args)) {
                 ret = false;
                 goto exit;
@@ -256,8 +257,8 @@ visit_heaps(mi_block_visit_fun *visitor, void *arg)
 
 exit:
     for_each_thread(t) {
-        mi_heap_t *heap = t->heaps[mi_heap_tag_gc];
-        if (heap) {
+        if (t->heaps) {
+            mi_heap_t *heap = &t->heaps[mi_heap_tag_gc];
             heap->visited = false;
         }
     }
