@@ -983,15 +983,8 @@ _Py_GetAllocatedBlocks(void)
     // TODO(sgross): this only counts the current thread's blocks.
     size_t allocated_blocks = 0;
 
-    mi_heap_tag_t tags[] = {
-        mi_heap_tag_default,
-        mi_heap_tag_obj,
-        mi_heap_tag_gc,
-        mi_heap_tag_list_array,
-        mi_heap_tag_dict_keys,
-    };
-    for (size_t i = 0; i != sizeof(tags)/sizeof(*tags); i++) {
-        mi_heap_t *heap = mi_heap_get_tag(tags[i]);
+    for (mi_heap_tag_t tag = 0; tag != MI_NUM_HEAPS; tag++) {
+        mi_heap_t *heap = mi_heap_get_tag(tag);
         mi_heap_visit_blocks(heap, false, &count_blocks, &allocated_blocks);
     }
 

@@ -240,26 +240,32 @@ visit_heaps(mi_block_visit_fun *visitor, void *arg)
 
     for_each_thread(t) {
         if (!t->heaps) continue;
-        mi_heap_t *heap = &t->heaps[mi_heap_tag_gc];
-        if (!heap->visited) {
-            if (!mi_heap_visit_blocks(heap, true, visitor_wrapper, &wrapper_args)) {
-                ret = false;
-                goto exit;
+        for (mi_heap_tag_t tag = mi_heap_tag_gc; tag <= mi_heap_tag_gc_pre; tag++) {
+            mi_heap_t *heap = &t->heaps[tag];
+            if (!heap->visited) {
+                if (!mi_heap_visit_blocks(heap, true, visitor_wrapper, &wrapper_args)) {
+                    ret = false;
+                    goto exit;
+                }
+                heap->visited = true;
             }
-            heap->visited = true;
         }
     }
 
-    if (!_mi_abandoned_visit_blocks(mi_heap_tag_gc, true, visitor_wrapper, &wrapper_args)) {
-        ret = false;
-        goto exit;
+    for (mi_heap_tag_t tag = mi_heap_tag_gc; tag <= mi_heap_tag_gc_pre; tag++) {
+        if (!_mi_abandoned_visit_blocks(tag, true, visitor_wrapper, &wrapper_args)) {
+            ret = false;
+            goto exit;
+        }
     }
 
 exit:
     for_each_thread(t) {
         if (t->heaps) {
-            mi_heap_t *heap = &t->heaps[mi_heap_tag_gc];
-            heap->visited = false;
+            for (mi_heap_tag_t tag = mi_heap_tag_gc; tag <= mi_heap_tag_gc_pre; tag++) {
+                mi_heap_t *heap = &t->heaps[tag];
+                heap->visited = false;
+            }
         }
     }
 
