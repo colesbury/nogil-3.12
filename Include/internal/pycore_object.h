@@ -449,7 +449,7 @@ _PyObject_IS_GC(PyObject *obj)
 static inline size_t
 _PyType_PreHeaderSize(PyTypeObject *tp)
 {
-    if (_PyType_IS_GC(tp)) {
+    if (_PyType_HasFeature(tp, Py_TPFLAGS_PREHEADER)) {
         return _PyGC_PREHEADER_SIZE;
     }
     return 0;

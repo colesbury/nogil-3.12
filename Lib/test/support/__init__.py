@@ -769,9 +769,9 @@ def python_is_optimized():
 
 _header = 'PBIIP'
 _align = '0n'
-if hasattr(sys, "getobjects"):
-    _header = '2P' + _header
-    _align = '0P'
+# if hasattr(sys, "getobjects"):
+#     _header = '2P' + _header
+#     _align = '0P'
 _vheader = _header + 'n'
 
 def calcobjsize(fmt):

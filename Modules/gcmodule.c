@@ -233,14 +233,20 @@ visit_heaps(mi_block_visit_fun *visitor, void *arg)
     struct visitor_wrapper_args wrapper_args;
     wrapper_args.visitor = visitor;
     wrapper_args.arg = arg;
-    wrapper_args.offset = 2 * sizeof(void *);
+    int debug_offset = 0;
     if (_PyMem_DebugEnabled()) {
-        wrapper_args.offset += 2 * sizeof(size_t);
+        debug_offset += 2 * sizeof(size_t);
     }
 
     for_each_thread(t) {
         if (!t->heaps) continue;
         for (mi_heap_tag_t tag = mi_heap_tag_gc; tag <= mi_heap_tag_gc_pre; tag++) {
+            if (tag == mi_heap_tag_gc_pre) {
+                wrapper_args.offset = debug_offset + _PyGC_PREHEADER_SIZE;
+            }
+            else {
+                wrapper_args.offset = debug_offset;
+            }
             mi_heap_t *heap = &t->heaps[tag];
             if (!heap->visited) {
                 if (!mi_heap_visit_blocks(heap, true, visitor_wrapper, &wrapper_args)) {
@@ -253,6 +259,12 @@ visit_heaps(mi_block_visit_fun *visitor, void *arg)
     }
 
     for (mi_heap_tag_t tag = mi_heap_tag_gc; tag <= mi_heap_tag_gc_pre; tag++) {
+        if (tag == mi_heap_tag_gc_pre) {
+            wrapper_args.offset = debug_offset + _PyGC_PREHEADER_SIZE;
+        }
+        else {
+            wrapper_args.offset = debug_offset;
+        }
         if (!_mi_abandoned_visit_blocks(tag, true, visitor_wrapper, &wrapper_args)) {
             ret = false;
             goto exit;
