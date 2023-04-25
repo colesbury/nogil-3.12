@@ -340,7 +340,7 @@ _PyGC_ResetHeap(void)
 static int
 visit_decref(PyObject *op, void *arg)
 {
-    if (_PyObject_IS_GC(op) && _PyObject_GC_IS_TRACKED(op)) {
+    if (_PyObject_GC_IS_TRACKED(op)) {
         gc_decref(op);
     }
     return 0;
@@ -814,13 +814,12 @@ clear_all_freelists(PyInterpreterState *interp)
 static int
 visit_reachable_heap(PyObject *op, GCState *gcstate)
 {
-    if (_PyObject_IS_GC(op) && _PyObject_GC_IS_TRACKED(op)) {
-        if (gc_is_unreachable(op)) {
-            op->ob_gc_bits -= _PyGC_UNREACHABLE;
-            op->ob_tid = 0;  // set gc refcount to zero
+    if (gc_is_unreachable(op)) {
+        assert(_PyObject_GC_IS_TRACKED(op));
+        op->ob_gc_bits -= _PyGC_UNREACHABLE;
+        op->ob_tid = 0;  // set gc refcount to zero
 
-            _PyObjectQueue_Push(&gcstate->gc_work, op);
-        }
+        _PyObjectQueue_Push(&gcstate->gc_work, op);
     }
    return 0;
 }
@@ -835,31 +834,18 @@ mark_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
 {
     VISITOR_BEGIN(block, args);
 
-    if (!_PyObject_GC_IS_TRACKED(op)) {
+    if (!gc_get_refs(op) || !gc_is_unreachable(op)) {
         return true;
     }
+
+    // Object is reachable but currently marked as unreachable.
+    // Mark it as reachable and traverse its pointers to find
+    // any other object that may be directly reachable from it.
+    _PyObject_ASSERT_WITH_MSG(op, gc_get_refs(op) > 0,
+                                  "refcount is too small");
+    op->ob_gc_bits -= _PyGC_UNREACHABLE;
 
     GCState *gcstate = ((struct visit_heap_args *)args)->gcstate;
-
-    if (!gc_get_refs(op)) {
-        return true;
-    }
-
-    if (!(gc_is_unreachable(op))) {
-        return true;
-    }
-
-    /* gc is definitely reachable from outside the
-        * original 'young'.  Mark it as such, and traverse
-        * its pointers to find any other objects that may
-        * be directly reachable from it.  Note that the
-        * call to tp_traverse may append objects to young,
-        * so we have to wait until it returns to determine
-        * the next object to visit.
-        */
-    _PyObject_ASSERT_WITH_MSG(op, gc_get_refs(op) > 0,
-                                    "refcount is too small");
-    op->ob_gc_bits -= _PyGC_UNREACHABLE;
     do {
         traverseproc traverse = Py_TYPE(op)->tp_traverse;
         (void) traverse(op,
@@ -881,7 +867,7 @@ scan_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
 
     gc_restore_tid(op);
 
-    if (!(op->ob_gc_bits & _PyGC_UNREACHABLE)) {
+    if (!gc_is_unreachable(op)) {
         // reachable
         gcstate->long_lived_total++;
     }
