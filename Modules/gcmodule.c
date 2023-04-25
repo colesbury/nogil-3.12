@@ -200,28 +200,12 @@ _Py_GC_REFCNT(PyObject *op)
     return local + shared - deferred;
 }
 
-struct visitor_wrapper_args {
-    mi_block_visit_fun *visitor;
-    void *arg;
+struct visitor_args {
     size_t offset;
 };
 
 static bool
-visitor_wrapper(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* arg)
-{
-    struct visitor_wrapper_args *args = (struct visitor_wrapper_args *)arg;
-    if (block == NULL) {
-        return true;
-    }
-
-    block = (char *)block + args->offset;
-    block_size -= args->offset;
-
-    return args->visitor(heap, area, block, block_size, args->arg);
-}
-
-static bool
-visit_heaps(mi_block_visit_fun *visitor, void *arg)
+visit_heaps(mi_block_visit_fun *visitor, struct visitor_args *arg)
 {
     _PyRuntimeState *runtime = &_PyRuntime;
     PyThreadState *t;
@@ -230,26 +214,22 @@ visit_heaps(mi_block_visit_fun *visitor, void *arg)
 
     HEAD_LOCK(runtime);
 
-    struct visitor_wrapper_args wrapper_args;
-    wrapper_args.visitor = visitor;
-    wrapper_args.arg = arg;
-    int debug_offset = 0;
+    int offsets[] = {
+        [mi_heap_tag_gc] = 0,
+        [mi_heap_tag_gc_pre] = _PyGC_PREHEADER_SIZE,
+    };
     if (_PyMem_DebugEnabled()) {
-        debug_offset += 2 * sizeof(size_t);
+        offsets[mi_heap_tag_gc] += 2 * sizeof(size_t);
+        offsets[mi_heap_tag_gc_pre] += 2 * sizeof(size_t);
     }
 
     for_each_thread(t) {
         if (!t->heaps) continue;
         for (mi_heap_tag_t tag = mi_heap_tag_gc; tag <= mi_heap_tag_gc_pre; tag++) {
-            if (tag == mi_heap_tag_gc_pre) {
-                wrapper_args.offset = debug_offset + _PyGC_PREHEADER_SIZE;
-            }
-            else {
-                wrapper_args.offset = debug_offset;
-            }
+            arg->offset = offsets[tag];
             mi_heap_t *heap = &t->heaps[tag];
             if (!heap->visited) {
-                if (!mi_heap_visit_blocks(heap, true, visitor_wrapper, &wrapper_args)) {
+                if (!mi_heap_visit_blocks(heap, true, visitor, arg)) {
                     ret = false;
                     goto exit;
                 }
@@ -259,13 +239,8 @@ visit_heaps(mi_block_visit_fun *visitor, void *arg)
     }
 
     for (mi_heap_tag_t tag = mi_heap_tag_gc; tag <= mi_heap_tag_gc_pre; tag++) {
-        if (tag == mi_heap_tag_gc_pre) {
-            wrapper_args.offset = debug_offset + _PyGC_PREHEADER_SIZE;
-        }
-        else {
-            wrapper_args.offset = debug_offset;
-        }
-        if (!_mi_abandoned_visit_blocks(tag, true, visitor_wrapper, &wrapper_args)) {
+        arg->offset = offsets[tag];
+        if (!_mi_abandoned_visit_blocks(tag, true, visitor, arg)) {
             ret = false;
             goto exit;
         }
@@ -286,14 +261,19 @@ exit:
 }
 
 struct find_object_args {
+    struct visitor_args base;
     PyObject *op;
     int found;
 };
 
+#define VISITOR_BEGIN(block, arg)   \
+    if (block == NULL) return true; \
+    PyObject *op = (PyObject *)((char *)block + *(size_t *)arg)
+
 static bool
 find_object_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* arg)
 {
-    PyObject *op = (PyObject *)block;
+    VISITOR_BEGIN(block, arg);
     struct find_object_args *args = (struct find_object_args *)arg;
     if (op == args->op) {
         args->found = 1;
@@ -307,7 +287,7 @@ _PyGC_find_object(PyObject *op)
     struct find_object_args args;
     args.op = op;
     args.found = 0;
-    visit_heaps(find_object_visitor, &args);
+    visit_heaps(find_object_visitor, &args.base);
     return args.found;
 }
 
@@ -315,7 +295,7 @@ _PyGC_find_object(PyObject *op)
 static bool
 validate_refcount_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* args)
 {
-    PyObject *op = (PyObject *)block;
+    VISITOR_BEGIN(block, args);
     if (_PyObject_GC_IS_TRACKED(op)) {
         assert(_Py_GC_REFCNT(op) >= 0);
         assert((op->ob_gc_bits & _PyGC_MASK_TID_REFCOUNT) == 0);
@@ -326,16 +306,17 @@ validate_refcount_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, voi
 static void
 validate_refcount(void)
 {
-    visit_heaps(validate_refcount_visitor, NULL);
+    struct visitor_args args;
+    visit_heaps(validate_refcount_visitor, &args);
 }
 #else
 #define validate_refcount() do{}while(0)
 #endif
 
 static bool
-reset_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* void_arg)
+reset_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* args)
 {
-    PyObject *op = (PyObject *)block;
+    VISITOR_BEGIN(block, args);
     if (!_PyObject_GC_IS_TRACKED(op)) {
         return true;
     }
@@ -351,7 +332,8 @@ _PyGC_ResetHeap(void)
     // after _Py_Initialize failures. Since _Py_Initialize clears _PyRuntime
     // we have no choice but to leak all PyObjects.
     // TODO(sgross): should we drop mi_heap here instead?
-    visit_heaps(reset_heap_visitor, NULL);
+    struct visitor_args args;
+    visit_heaps(reset_heap_visitor, &args);
 }
 
 /* Subtracts incoming references. */
@@ -417,6 +399,7 @@ merge_refcount(PyObject *op, Py_ssize_t extra)
 }
 
 struct update_refs_args {
+    struct visitor_args base;
     GCState *gcstate;
     int split_keys_marked;
     _PyGC_Reason gc_reason;
@@ -427,7 +410,7 @@ struct update_refs_args {
 static bool
 update_refs(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* args)
 {
-    PyObject *op = (PyObject *)block;
+    VISITOR_BEGIN(block, args);
 
     struct update_refs_args *arg = (struct update_refs_args *)args;
 
@@ -497,7 +480,7 @@ find_gc_roots(GCState *gcstate, _PyGC_Reason reason, Py_ssize_t *split_keys_mark
         .split_keys_marked = 0,
         .gc_reason = reason,
     };
-    visit_heaps(update_refs, &args);
+    visit_heaps(update_refs, &args.base);
     *split_keys_marked = args.split_keys_marked;
 }
 
@@ -842,15 +825,21 @@ visit_reachable_heap(PyObject *op, GCState *gcstate)
    return 0;
 }
 
+struct visit_heap_args {
+    struct visitor_args base;
+    GCState *gcstate;
+};
+
 static bool
 mark_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* args)
 {
-    PyObject *op = (PyObject *)block;
+    VISITOR_BEGIN(block, args);
+
     if (!_PyObject_GC_IS_TRACKED(op)) {
         return true;
     }
 
-    GCState *gcstate = (GCState *)args;
+    GCState *gcstate = ((struct visit_heap_args *)args)->gcstate;
 
     if (!gc_get_refs(op)) {
         return true;
@@ -884,10 +873,11 @@ mark_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block
 static bool
 scan_heap_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* args)
 {
-    PyObject *op = (PyObject *)block;
+    VISITOR_BEGIN(block, args);
+
     if (!_PyObject_GC_IS_TRACKED(op)) return true;
 
-    GCState *gcstate = (GCState *)args;
+    GCState *gcstate = ((struct visit_heap_args *)args)->gcstate;
 
     gc_restore_tid(op);
 
@@ -935,9 +925,11 @@ reverse_queue(_PyObjectQueue **queue)
 
 static inline void
 deduce_unreachable_heap(GCState *gcstate) {
-    visit_heaps(mark_heap_visitor, gcstate);
+    struct visit_heap_args args = { .gcstate = gcstate };
 
-    visit_heaps(scan_heap_visitor, gcstate);
+    visit_heaps(mark_heap_visitor, &args.base);
+
+    visit_heaps(scan_heap_visitor, &args.base);
 
     // reverse the unreachable queue ordering to better match
     // the order in which objects are allocated (not guaranteed!)
@@ -1467,6 +1459,7 @@ error:
 }
 
 struct gc_referrers_arg {
+    struct visitor_args base;
     PyObject *objs;
     _PyObjectQueue *queue;
 };
@@ -1474,15 +1467,16 @@ struct gc_referrers_arg {
 static bool
 gc_referrers_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* void_arg)
 {
-    PyObject *obj = (PyObject *)block;
-    if (!_PyObject_GC_IS_TRACKED(obj)) return true;
+    VISITOR_BEGIN(block, void_arg);
+
+    if (!_PyObject_GC_IS_TRACKED(op)) return true;
 
     struct gc_referrers_arg *arg = (struct gc_referrers_arg*)void_arg;
     PyObject *objs = arg->objs;
 
-    traverseproc traverse = Py_TYPE(obj)->tp_traverse;
-    if (obj != objs && traverse(obj, (visitproc)referrersvisit, objs)) {
-        _PyObjectQueue_Push(&arg->queue, obj);
+    traverseproc traverse = Py_TYPE(op)->tp_traverse;
+    if (op != objs && traverse(op, (visitproc)referrersvisit, objs)) {
+        _PyObjectQueue_Push(&arg->queue, op);
     }
     return true;
 }
@@ -1506,7 +1500,7 @@ gc_get_referrers(PyObject *self, PyObject *args)
     struct gc_referrers_arg arg;
     arg.objs = args;
     arg.queue = NULL;
-    visit_heaps(gc_referrers_visitor, &arg);
+    visit_heaps(gc_referrers_visitor, &arg.base);
 
     return queue_to_list(&arg.queue);
 }
@@ -1552,16 +1546,16 @@ gc_get_referents(PyObject *self, PyObject *args)
 }
 
 struct gc_get_objects_arg {
+    struct visitor_args base;
     _PyObjectQueue *queue;
-    Py_ssize_t generation;
 };
 
 static bool
 gc_get_objects_visitor(const mi_heap_t* heap, const mi_heap_area_t* area, void* block, size_t block_size, void* void_arg)
 {
-    struct gc_get_objects_arg *arg = (struct gc_get_objects_arg*)void_arg;
-    PyObject *op = (PyObject *)block;
+    VISITOR_BEGIN(block, void_arg);
     if (!_PyObject_GC_IS_TRACKED(op)) return true;
+    struct gc_get_objects_arg *arg = (struct gc_get_objects_arg*)void_arg;
     _PyObjectQueue_Push(&arg->queue, op);
     return true;
 }
@@ -1602,8 +1596,7 @@ gc_get_objects_impl(PyObject *module, Py_ssize_t generation)
 
     struct gc_get_objects_arg arg;
     arg.queue = NULL;
-    arg.generation = generation + 1;
-    visit_heaps(gc_get_objects_visitor, &arg);
+    visit_heaps(gc_get_objects_visitor, &arg.base);
     return queue_to_list(&arg.queue);
 }
 
