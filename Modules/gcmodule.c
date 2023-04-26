@@ -484,23 +484,6 @@ find_gc_roots(GCState *gcstate, _PyGC_Reason reason, Py_ssize_t *split_keys_mark
     *split_keys_marked = args.split_keys_marked;
 }
 
-/* A traversal callback for subtract_refs. */
-static int
-visit_decref_unreachable(PyObject *op, void *data)
-{
-    assert(op != NULL);
-    if (PyObject_IS_GC(op)) {
-        /* We're only interested in gc_refs for objects in the
-         * generation being collected, which can be recognized
-         * because only they have positive gc_refs.
-         */
-        if (gc_is_unreachable(op)) {
-            gc_decref(op);
-        }
-    }
-    return 0;
-}
-
 /* Return true if object has a pre-PEP 442 finalization method. */
 static int
 has_legacy_finalizer(PyObject *op)
@@ -925,6 +908,19 @@ deduce_unreachable_heap(GCState *gcstate) {
     clear_weakrefs(gcstate);
 }
 
+/* A traversal callback for handle_resurrected_objects. */
+static int
+visit_decref_unreachable(PyObject *op, void *data)
+{
+    if (PyObject_GC_IsTracked(op) && gc_is_unreachable(op)) {
+        // We are only interested in objects that are both tracked
+        // and in the unreachable queue. Note that some objects in the
+        // queue may have been untracked by finalizers.
+        gc_decref(op);
+    }
+    return 0;
+}
+
 /* Handle objects that may have resurrected after a call to 'finalize_garbage', moving
    them to 'old_generation' and placing the rest on 'still_unreachable'.
 
@@ -950,6 +946,8 @@ handle_resurrected_objects(GCState *gcstate)
         for (Py_ssize_t i = 0, n = q->n; i != n; i++) {
             PyObject *op = q->objs[i];
             assert(gc_get_refs(op) == 0);
+            assert(gc_is_unreachable(op));
+            assert(_Py_REF_IS_MERGED(op->ob_ref_shared));
         }
         q = q->prev;
     }
@@ -962,7 +960,6 @@ handle_resurrected_objects(GCState *gcstate)
     while (q != NULL) {
         for (Py_ssize_t i = 0, n = q->n; i != n; i++) {
             PyObject *op = q->objs[i];
-            assert(gc_is_unreachable(op));
 
             if (!_PyObject_GC_IS_TRACKED(op)) {
                 // The finalizer may have untracked this object.
