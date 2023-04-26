@@ -39,8 +39,6 @@ typedef struct {
 #define _PyGC_MASK_FINALIZED   (2)
 /* Bit 2 is set when the object is not currently reachable */
 #define _PyGC_UNREACHABLE      (4)
-/* Bit 3 is set when the ob_tid stores the refcount */
-#define _PyGC_MASK_TID_REFCOUNT (8)
 
 static inline PyGC_Head* _Py_AS_GC(PyObject *op) {
     char *mem = _Py_STATIC_CAST(char*, op);
