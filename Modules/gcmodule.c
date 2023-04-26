@@ -157,7 +157,7 @@ _PyGC_InitState(GCState *gcstate)
     gcstate->enabled = 1; /* automatic collection enabled? */
     gcstate->gc_live = 0;
     gcstate->gc_threshold = 7000;
-    gcstate->gc_scale = 25;
+    gcstate->gc_scale = 100;
 
     const char* scale_str = _Py_GetEnv(1, "PYTHONGC");
     if (scale_str) {
