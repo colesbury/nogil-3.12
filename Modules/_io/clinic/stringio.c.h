@@ -306,7 +306,6 @@ _io_StringIO___init__(PyObject *self, PyObject *args, PyObject *kwargs)
 
     #define NUM_KEYWORDS 2
     static struct {
-        _PyGC_Head_UNUSED _this_is_not_used;
         PyObject_VAR_HEAD
         PyObject *ob_item[NUM_KEYWORDS];
     } _kwtuple = {
@@ -426,4 +425,4 @@ _io_StringIO_seekable(stringio *self, PyObject *Py_UNUSED(ignored))
 
     return return_value;
 }
-/*[clinic end generated code: output=d18ce58b1764309c input=a9049054013a1b77]*/
+/*[clinic end generated code: output=92c1c8ca6dc879cf input=a9049054013a1b77]*/
