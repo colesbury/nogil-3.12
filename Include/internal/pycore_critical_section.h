@@ -110,6 +110,10 @@ _Py_critical_section2_begin_slow(struct _Py_critical_section2 *c,
 static inline void
 _Py_critical_section_begin(struct _Py_critical_section *c, _PyMutex *m)
 {
+    if (!_PyRuntime.multithreaded) {
+        c->mutex = NULL;
+        return;
+    }
     if (_PyMutex_lock_fast(m)) {
         PyThreadState *tstate = PyThreadState_GET();
         c->mutex = m;
@@ -136,6 +140,9 @@ _Py_critical_section_pop(struct _Py_critical_section *c)
 static inline void
 _Py_critical_section_end(struct _Py_critical_section *c)
 {
+    if (c->mutex == NULL) {
+        return;
+    }
     _PyMutex_unlock(c->mutex);
     _Py_critical_section_pop(c);
 }
@@ -144,6 +151,11 @@ static inline void
 _Py_critical_section2_begin(struct _Py_critical_section2 *c,
                             _PyMutex *m1, _PyMutex *m2)
 {
+    if (!_PyRuntime.multithreaded) {
+        c->base.mutex = NULL;
+        c->mutex2 = NULL;
+        return;
+    }
     if ((uintptr_t)m2 < (uintptr_t)m1) {
         _PyMutex *m1_ = m1;
         m1 = m2;
@@ -176,6 +188,9 @@ _Py_critical_section2_begin(struct _Py_critical_section2 *c,
 static inline void
 _Py_critical_section2_end(struct _Py_critical_section2 *c)
 {
+    if (c->base.mutex == NULL) {
+        return;
+    }
     if (c->mutex2) {
         _PyMutex_unlock(c->mutex2);
     }

@@ -249,6 +249,10 @@ test_hashtable(PyObject *self, PyObject *Py_UNUSED(args))
 static PyObject *
 test_critical_sections(PyObject *self, PyObject *Py_UNUSED(args))
 {
+    if (!_PyRuntime.multithreaded) {
+        _PyRuntime.multithreaded = 1;
+    }
+
     PyThreadState *tstate = PyThreadState_GET();
     _PyMutex m1, m2;
     memset(&m1, 0, sizeof(m1));
