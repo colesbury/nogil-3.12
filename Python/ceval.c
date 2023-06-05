@@ -895,7 +895,6 @@ GETITEM(PyObject *v, Py_ssize_t i) {
         /* This is only a single jump on release builds! */ \
         UPDATE_MISS_STATS((INSTNAME));                      \
         assert(_PyOpcode_Deopt[opcode] == (INSTNAME));      \
-        _Py_critical_section_end(&_cs);                     \
         goto INSTNAME ## _DEOPT;                            \
     }
 

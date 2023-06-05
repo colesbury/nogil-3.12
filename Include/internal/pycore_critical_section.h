@@ -56,21 +56,10 @@ enum {
     _Py_CRITICAL_SECTION_MASK = 3
 };
 
-#define Py_BEGIN_CRITICAL_SECTION(op) {         \
-    struct _Py_critical_section _cs;            \
-    _Py_critical_section_begin(&_cs, &_PyObject_CAST(op)->ob_mutex)
-
-#define Py_END_CRITICAL_SECTION                 \
-    _Py_critical_section_end(&_cs);             \
-}
-
-#define Py_BEGIN_CRITICAL_SECTION2(a, b) {      \
-    struct _Py_critical_section2 _cs2;          \
-    _Py_critical_section2_begin(&_cs2, &_PyObject_CAST(a)->ob_mutex, &_PyObject_CAST(b)->ob_mutex)
-
-#define Py_END_CRITICAL_SECTION2                \
-    _Py_critical_section2_end(&_cs2);           \
-}
+#define Py_BEGIN_CRITICAL_SECTION(op) do {} while (0)
+#define Py_END_CRITICAL_SECTION do {} while (0)
+#define Py_BEGIN_CRITICAL_SECTION2(a, b) do {} while (0)
+#define Py_END_CRITICAL_SECTION2 do {} while (0)
 
 struct _Py_critical_section {
     // Pointer to the an outer active critical section (or
