@@ -2,15 +2,10 @@
 #ifndef Py_INTERNAL_CRITICAL_SECTION_H
 #define Py_INTERNAL_CRITICAL_SECTION_H
 
-#include "pycore_pystate.h"
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
-#endif
-
-#ifndef Py_BUILD_CORE
-#  error "this header requires Py_BUILD_CORE define"
 #endif
 
 /*

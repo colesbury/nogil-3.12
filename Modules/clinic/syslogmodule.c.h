@@ -90,7 +90,9 @@ syslog_openlog(PyObject *module, PyObject *const *args, Py_ssize_t nargs, PyObje
         goto exit;
     }
 skip_optional_pos:
+    Py_BEGIN_CRITICAL_SECTION(module);
     return_value = syslog_openlog_impl(module, ident, logopt, facility);
+    Py_END_CRITICAL_SECTION;
 
 exit:
     return return_value;
@@ -131,7 +133,9 @@ syslog_syslog(PyObject *module, PyObject *args)
             PyErr_SetString(PyExc_TypeError, "syslog.syslog requires 1 to 2 arguments");
             goto exit;
     }
+    Py_BEGIN_CRITICAL_SECTION(module);
     return_value = syslog_syslog_impl(module, group_left_1, priority, message);
+    Py_END_CRITICAL_SECTION;
 
 exit:
     return return_value;
@@ -152,7 +156,13 @@ syslog_closelog_impl(PyObject *module);
 static PyObject *
 syslog_closelog(PyObject *module, PyObject *Py_UNUSED(ignored))
 {
-    return syslog_closelog_impl(module);
+    PyObject *return_value = NULL;
+
+    Py_BEGIN_CRITICAL_SECTION(module);
+    return_value = syslog_closelog_impl(module);
+    Py_END_CRITICAL_SECTION;
+
+    return return_value;
 }
 
 PyDoc_STRVAR(syslog_setlogmask__doc__,
@@ -178,7 +188,9 @@ syslog_setlogmask(PyObject *module, PyObject *arg)
     if (maskpri == -1 && PyErr_Occurred()) {
         goto exit;
     }
+    Py_BEGIN_CRITICAL_SECTION(module);
     _return_value = syslog_setlogmask_impl(module, maskpri);
+    Py_END_CRITICAL_SECTION;
     if ((_return_value == -1) && PyErr_Occurred()) {
         goto exit;
     }
@@ -253,4 +265,4 @@ syslog_LOG_UPTO(PyObject *module, PyObject *arg)
 exit:
     return return_value;
 }
-/*[clinic end generated code: output=f53c532f7978cc54 input=a9049054013a1b77]*/
+/*[clinic end generated code: output=8f7c22a755fe38db input=a9049054013a1b77]*/

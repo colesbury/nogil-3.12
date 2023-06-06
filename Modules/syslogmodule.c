@@ -50,6 +50,7 @@ Revision history:
 /* syslog module */
 
 #include "Python.h"
+#include "pycore_critical_section.h"
 #include "osdefs.h"               // SEP
 
 #include <syslog.h>
@@ -127,7 +128,7 @@ syslog_get_argv(void)
 
 
 /*[clinic input]
-syslog.openlog
+syslog.openlog @ mutex
 
     ident: unicode = NULL
     logoption as logopt: long = 0
@@ -139,7 +140,7 @@ Set logging options of subsequent syslog() calls.
 static PyObject *
 syslog_openlog_impl(PyObject *module, PyObject *ident, long logopt,
                     long facility)
-/*[clinic end generated code: output=5476c12829b6eb75 input=8a987a96a586eee7]*/
+/*[clinic end generated code: output=5476c12829b6eb75 input=351888102dbc10b5]*/
 {
     // Since the sys.openlog changes the process level state of syslog library,
     // this operation is only allowed for the main interpreter.
@@ -184,7 +185,7 @@ syslog_openlog_impl(PyObject *module, PyObject *ident, long logopt,
 
 
 /*[clinic input]
-syslog.syslog
+syslog.syslog @ mutex
 
     [
     priority: int(c_default="LOG_INFO") = LOG_INFO
@@ -200,7 +201,7 @@ Send the string message to the system logger.
 static PyObject *
 syslog_syslog_impl(PyObject *module, int group_left_1, int priority,
                    const char *message)
-/*[clinic end generated code: output=c3dbc73445a0e078 input=ac83d92b12ea3d4e]*/
+/*[clinic end generated code: output=c3dbc73445a0e078 input=750638de4ab849ef]*/
 {
     if (PySys_Audit("syslog.syslog", "is", priority, message) < 0) {
         return NULL;
@@ -238,14 +239,14 @@ syslog_syslog_impl(PyObject *module, int group_left_1, int priority,
 
 
 /*[clinic input]
-syslog.closelog
+syslog.closelog @ mutex
 
 Reset the syslog module values and call the system library closelog().
 [clinic start generated code]*/
 
 static PyObject *
 syslog_closelog_impl(PyObject *module)
-/*[clinic end generated code: output=97890a80a24b1b84 input=fb77a54d447acf07]*/
+/*[clinic end generated code: output=97890a80a24b1b84 input=d037857842da63f3]*/
 {
     // Since the sys.closelog changes the process level state of syslog library,
     // this operation is only allowed for the main interpreter.
@@ -266,7 +267,7 @@ syslog_closelog_impl(PyObject *module)
 }
 
 /*[clinic input]
-syslog.setlogmask -> long
+syslog.setlogmask @ mutex -> long
 
     maskpri: long
     /
@@ -276,7 +277,7 @@ Set the priority mask to maskpri and return the previous mask value.
 
 static long
 syslog_setlogmask_impl(PyObject *module, long maskpri)
-/*[clinic end generated code: output=d6ed163917b434bf input=adff2c2b76c7629c]*/
+/*[clinic end generated code: output=d6ed163917b434bf input=f384903bb51cc188]*/
 {
     if (PySys_Audit("syslog.setlogmask", "l", maskpri) < 0) {
         return -1;
