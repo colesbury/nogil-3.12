@@ -25,6 +25,7 @@ brc_state(PyThreadState *tstate)
 static PyThreadStateImpl *
 find_thread_state(Bucket *bucket, uintptr_t thread_id)
 {
+    assert(bucket->threads.next != NULL);
     struct llist_node *node;
     llist_for_each(node, &bucket->threads) {
         PyThreadStateImpl *ts;

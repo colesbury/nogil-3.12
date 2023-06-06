@@ -938,6 +938,11 @@ static inline mi_threadid_t _mi_thread_id(void) mi_attr_noexcept {
     // issue #384, #495: on the Bionic libc (Android), slot 1 is the thread id
     // see: https://github.com/aosp-mirror/platform_bionic/blob/c44b1d0676ded732df4b3b21c5f798eacae93228/libc/platform/bionic/tls_defines.h#L86
     return (uintptr_t)mi_tls_slot(1);
+  #elif defined(__aarch64__) && defined(__APPLE__)
+    // Match _PyThread_Id() so that restoring ob_tid from segment->thread_id works.
+    uintptr_t tid;
+    __asm__ volatile ("mrs %0, tpidrro_el0" : "=r" (tid));
+    return tid;
   #else
     // in all our other targets, slot 0 is the thread id
     // glibc: https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=sysdeps/x86_64/nptl/tls.h
