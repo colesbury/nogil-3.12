@@ -400,11 +400,9 @@ dummy_func(
             DEOPT_IF(!_PyLong_IsPositiveSingleDigit(sub), BINARY_SUBSCR);
             assert(((PyLongObject *)_PyLong_GetZero())->ob_digit[0] == 0);
             Py_ssize_t index = ((PyLongObject*)sub)->ob_digit[0];
-            DEOPT_IF(index >= PyList_GET_SIZE(list), BINARY_SUBSCR);
+            res = PyList_FetchItem(list, index);
+            ERROR_IF(res == NULL, error);
             STAT_INC(BINARY_SUBSCR, hit);
-            res = PyList_GET_ITEM(list, index);
-            assert(res != NULL);
-            Py_INCREF(res);
             _Py_DECREF_SPECIALIZED(sub, (destructor)PyObject_Free);
             Py_DECREF(list);
         }
@@ -515,13 +513,21 @@ dummy_func(
 
             // Ensure nonnegative, zero-or-one-digit ints.
             DEOPT_IF(!_PyLong_IsPositiveSingleDigit(sub), STORE_SUBSCR);
+            PyObject *old_value;
+            bool deopt = false;
+            Py_BEGIN_CRITICAL_SECTION(list);
             Py_ssize_t index = ((PyLongObject*)sub)->ob_digit[0];
             // Ensure index < len(list)
-            DEOPT_IF(index >= PyList_GET_SIZE(list), STORE_SUBSCR);
-            STAT_INC(STORE_SUBSCR, hit);
-
-            PyObject *old_value = PyList_GET_ITEM(list, index);
-            PyList_SET_ITEM(list, index, value);
+            if (index < PyList_GET_SIZE(list)) {
+                STAT_INC(STORE_SUBSCR, hit);
+                old_value = PyList_GET_ITEM(list, index);
+                PyList_SET_ITEM(list, index, value);
+            }
+            else {
+                deopt = true;
+            }
+            Py_END_CRITICAL_SECTION;
+            DEOPT_IF(deopt, STORE_SUBSCR);
             assert(old_value != NULL);
             Py_DECREF(old_value);
             _Py_DECREF_SPECIALIZED(sub, (destructor)PyObject_Free);
